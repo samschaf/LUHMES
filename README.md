@@ -39,7 +39,9 @@ Files:
 "10-GRIK2_multi_omic_plot.Rmd" was used to generate Figure 6.
 
 "11-SMITE_WT_092020.Rmd" contains SMITE multi-omic integration for WT aSyn vs control cells (Figures 5-6, Supplementary Figure 8, Supplementary Table 17).
+
 "11a-SMITE_A30P_092020.Rmd" contains SMITE multi-omic integration for A30P aSyn vs control cells (Figures 5-6, Supplementary Figure 9, Supplementary Table 18).
+
 "12-omics_overlap.Rmd" was used to identify overlapping hits from independent differential DNAm, DNAhm, and expression analysis (Supplementary Tables 15-16) and to generate Figure 1.
 
 
