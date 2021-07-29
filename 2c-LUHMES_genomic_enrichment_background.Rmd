@@ -1,0 +1,242 @@
+DecipherPD LUHMES EPIC Array Runs - Creation of genomic enrichment background file
+================================
+  
+##### Analyst: Samantha Schaffner
+##### Date: June 18, 2020
+  
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+In this script, I used previously generated files "transcript_df" and "multi_transcript_df" to create a background annotation for genomic context enrichments containing one genomic context per CpG site, based on the longest transcript and most specific annotation category for that site.
+
+#Load in data
+```{r load data, eval=F}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/transcript_df_062020.RData") #contains all cpg-transcript relations, with duplicates
+
+multi_transcript_df <- read.delim("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/multi_transcript_df_202008.txt") #contains one longest transcript entry per cpg
+
+head(transcript_df)
+#site group          acc
+#1 cg00000109  Body NM_001135095
+#2 cg00000109  Body    NM_022763
+#3 cg00000158  Body    NR_073446
+#4 cg00000158  Body    NM_013417
+#5 cg00000158  Body    NM_002161
+#6 cg00000236 3'UTR    NM_005662
+nrow(transcript_df) #1,522,973
+length(unique(transcript_df$site)) #813,589
+
+head(multi_transcript_df)
+#       site longest_transcript                      ID
+#1 cg00000109       NM_001135095 cg00000109.NM_001135095
+#2 cg00000158          NM_013417    cg00000158.NM_013417
+#3 cg00000236       NM_001135694 cg00000236.NM_001135694
+#4 cg00000289          NM_001102    cg00000289.NM_001102
+#5 cg00000292          NM_173201    cg00000292.NM_173201
+#6 cg00000622       NM_001008860 cg00000622.NM_001008860
+nrow(multi_transcript_df) #297,859
+length(unique(multi_transcript_df$site)) #297,859
+
+#multi_transcript_df needs to have the "group" column added.
+```
+
+#Matching the two annotation files
+I will subset the master file, "transcript_df", that contains the desired genomic context information to the longest transcript per site (using "multi_transcript_df").
+```{r matching files, eval=F}
+#creating a site-transcript ID for matching to "multi_transcript_df"
+transcript_df$ID <- paste(transcript_df$site, transcript_df$acc, sep=".")
+
+#subsetting master annotation to the longest transcript per site, as defined in "multi_transcript_df"
+transcript_df_longest <- transcript_df[transcript_df$ID %in% multi_transcript_df$ID,]
+nrow(transcript_df_longest) #328,393
+length(unique(transcript_df_longest$site)) #297,495
+297859 - 297495 #364 - missing the sites with no NCBI evidence (add these back in later)
+
+#some transcripts have multiple associated genomic context annotations.
+#getting all of the sites with multiple annotations
+length(dup_sites <- unique(transcript_df_longest$site[which(duplicated(transcript_df_longest$site))])) #30,898
+#subsetting the master annotation to sites with multiple annotations
+nrow(transcript_df_longest_dup <- transcript_df_longest[transcript_df_longest$site %in% dup_sites,]) #61,796
+length(unique(transcript_df_longest_dup$site)) #30,898
+```
+
+#Removing remaining duplicate annotations
+Most of the genomic context annotations in the "duplicated" data frame are nested; for example, a probe can be part of both the TSS200 and TSS1500, or both the 5' UTR and first exon. I will next further subset these probes based on the *most specific* annotation.
+```{r removing duplicates, eval=F}
+unique(transcript_df_longest_dup$group)
+#"1stExon" "5'UTR"   "TSS1500" "TSS200"  "3'UTR"   "Body"    "ExonBnd"
+
+specific_anno <- rep(NA, length(dup_sites))
+
+for (i in 1:10000){
+  
+  #print(i)
+  
+  cpg_set <- transcript_df_longest_dup[transcript_df_longest_dup$site==dup_sites[i],]
+  
+  #ExonBnd - most specific
+  if ("ExonBnd" %in% cpg_set$group){
+    specific_anno[i] <- "ExonBnd"}
+  
+  #5'UTR/3'UTR - 2nd most specific
+  else if ("5'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "5'UTR"}
+  else if ("3'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "3'UTR"}
+  
+  #1stExon - 3rd most specific (may contain the 5' UTR)
+  else if ("1stExon" %in% cpg_set$group){
+    specific_anno[i] <- "1stExon"}
+  
+  #TSS200 - 4th most specific
+  else if ("TSS200" %in% cpg_set$group){
+    specific_anno[i] <- "TSS200"}
+  
+  #TSS1500 - 5th most specific (may contain TSS200)
+  else if ("TSS1500" %in% cpg_set$group){
+    specific_anno[i] <- "TSS1500"}
+  
+  #Body - least specific (may contain UTRs, 1stExon, ExonBnd...)
+  else if ("Body" %in% cpg_set$group){
+    specific_anno[i] <- "Body"}
+}
+
+for (i in 10001:20000){
+  
+  #print(i)
+  
+  cpg_set <- transcript_df_longest_dup[transcript_df_longest_dup$site==dup_sites[i],]
+  
+  #ExonBnd - most specific
+  if ("ExonBnd" %in% cpg_set$group){
+    specific_anno[i] <- "ExonBnd"}
+  
+  #5'UTR/3'UTR - 2nd most specific
+  else if ("5'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "5'UTR"}
+  else if ("3'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "3'UTR"}
+  
+  #1stExon - 3rd most specific (may contain the 5' UTR)
+  else if ("1stExon" %in% cpg_set$group){
+    specific_anno[i] <- "1stExon"}
+  
+  #TSS200 - 4th most specific
+  else if ("TSS200" %in% cpg_set$group){
+    specific_anno[i] <- "TSS200"}
+  
+  #TSS1500 - 5th most specific (may contain TSS200)
+  else if ("TSS1500" %in% cpg_set$group){
+    specific_anno[i] <- "TSS1500"}
+  
+  #Body - least specific (may contain UTRs, 1stExon, ExonBnd...)
+  else if ("Body" %in% cpg_set$group){
+    specific_anno[i] <- "Body"}
+}
+
+for (i in 20001:30000){
+  
+  #print(i)
+  
+  cpg_set <- transcript_df_longest_dup[transcript_df_longest_dup$site==dup_sites[i],]
+  
+  #ExonBnd - most specific
+  if ("ExonBnd" %in% cpg_set$group){
+    specific_anno[i] <- "ExonBnd"}
+  
+  #5'UTR/3'UTR - 2nd most specific
+  else if ("5'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "5'UTR"}
+  else if ("3'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "3'UTR"}
+  
+  #1stExon - 3rd most specific (may contain the 5' UTR)
+  else if ("1stExon" %in% cpg_set$group){
+    specific_anno[i] <- "1stExon"}
+  
+  #TSS200 - 4th most specific
+  else if ("TSS200" %in% cpg_set$group){
+    specific_anno[i] <- "TSS200"}
+  
+  #TSS1500 - 5th most specific (may contain TSS200)
+  else if ("TSS1500" %in% cpg_set$group){
+    specific_anno[i] <- "TSS1500"}
+  
+  #Body - least specific (may contain UTRs, 1stExon, ExonBnd...)
+  else if ("Body" %in% cpg_set$group){
+    specific_anno[i] <- "Body"}
+}
+
+for (i in 30001:length(dup_sites)){
+  
+  #print(i)
+  
+  cpg_set <- transcript_df_longest_dup[transcript_df_longest_dup$site==dup_sites[i],]
+  
+  #ExonBnd - most specific
+  if ("ExonBnd" %in% cpg_set$group){
+    specific_anno[i] <- "ExonBnd"}
+  
+  #5'UTR/3'UTR - 2nd most specific
+  else if ("5'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "5'UTR"}
+  else if ("3'UTR" %in% cpg_set$group){
+    specific_anno[i] <- "3'UTR"}
+  
+  #1stExon - 3rd most specific (may contain the 5' UTR)
+  else if ("1stExon" %in% cpg_set$group){
+    specific_anno[i] <- "1stExon"}
+  
+  #TSS200 - 4th most specific
+  else if ("TSS200" %in% cpg_set$group){
+    specific_anno[i] <- "TSS200"}
+  
+  #TSS1500 - 5th most specific (may contain TSS200)
+  else if ("TSS1500" %in% cpg_set$group){
+    specific_anno[i] <- "TSS1500"}
+  
+  #Body - least specific (may contain UTRs, 1stExon, ExonBnd...)
+  else if ("Body" %in% cpg_set$group){
+    specific_anno[i] <- "Body"}
+}
+
+
+summary(as.factor(specific_anno))
+
+#  3'UTR   5'UTR ExonBnd  TSS200 
+#    673   23813    6411       1 
+#All entries are complete, no NA's.
+```
+
+#Organizing data frame and saving
+Next I'll put the specific genomic context annotations generated above together with the unique annotations per site, and save the file for use in genomic context enrichment permuation.
+```{r organize and save, eval=F}
+#Data frame for sites that had multiple annotations/one "longest transcript"
+specific_anno <- data.frame(site=dup_sites, group=specific_anno)
+specific_anno$ID <- paste(specific_anno$site, specific_anno$group, sep=".")
+head(specific_anno)
+#site group               ID
+#1 cg00001245 5'UTR cg00001245.5'UTR
+#2 cg00001594 5'UTR cg00001594.5'UTR
+#3 cg00001874 3'UTR cg00001874.3'UTR
+#4 cg00002028 5'UTR cg00002028.5'UTR
+#5 cg00002116 5'UTR cg00002116.5'UTR
+#6 cg00002808 3'UTR cg00002808.3'UTR
+
+#Data frame for sites that had one annotation/one "longest transcript"
+nrow(single_context_anno <- transcript_df_longest[-which(transcript_df_longest$site %in% specific_anno$site),]) #266,597
+
+#Combining these
+nrow(transcript_df_longest <- rbind(specific_anno[,1:2], single_context_anno[,1:2])) #297,495
+
+#All the sites with multiple transcripts in the original fData are now taken care of.
+
+#Add in the sites with one transcript...
+nrow(transcript_df_single <- transcript_df[-which(transcript_df$site %in% multi_transcript_df$site),]) #515,730
+
+#Add in the sites with transcript information removed from NCBI...
+nrow(outliers <- multi_transcript_df[-which(multi_transcript_df$site %in% transcript_df_longest$site),]) #364
+outliers$group <- rep("", nrow(outliers))
+nrow(master_anno <- rbind(transcript_df_longest, transcript_df_single[,c("site","group")], outliers[,c("site","group")])) #813,589
+
+save(master_anno, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/master_anno_202008.RData")
+```

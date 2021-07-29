@@ -1,0 +1,355 @@
+##Gene Ontology Enrichment Analysis Using ErmineR (ORA Method)
+
+Author: Samantha Schaffner
+Date: August 5, 2020
+
+The R package ermineR serves as a wrapper for ErmineJ. Using the GO annotation for EPIC probes crashes the ErmineJ desktop app, so running the analysis through R is a workable alternative.
+
+The ermineR GitHub page with documentation can be found here: https://github.com/PavlidisLab/ermineR
+
+Refer to the ErmineJ website for more detailed information about the gene ontology enrichment methods and other functions: https://erminej.msl.ubc.ca/
+
+To install ermineR:
+library(BiocInstaller)
+biocLite("PavlidisLab/ermineR")
+
+##Libraries and working directory
+```{r libraries, eval=F}
+setwd("~/")
+library(dplyr)
+library(ggplot2)
+library(ermineR)
+library(biomaRt)
+#tells R where to find Java
+Sys.setenv(JAVA_HOME="/mnt/koborlab-hpc/miniconda2/")
+```
+
+#ORA and analysis: SNCA-OE vs control LUHMES cells, hmC
+Here I will perform ORA on a hit list of differentially hydroxymethylated genes between two genotypes of LUHMES dopaminergic neuron cells.
+```{r ORA WT hmC, eval=F}
+#Background EPIC annotation (made by Maggie Fu)
+anno <- read.delim("~/KoborLab/kobor_space/shared_coding_resource/annEPIC_GO_v4.txt")
+
+#Your hit list of genes - must be a vector of characters
+WT_hmC_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+
+#"multi_transcript_df" contains the accession ID for the longest transcript associated with each CpG site that has multiple associated transcripts, but not the gene name (in future, put the gene name into this reference to make things more efficient!). 
+#"transcript_df" contains all possible transcript-cpg pairs (including sites with one associated transcript)
+#merging these first to get a data frame with all sites respresnted once, and their longest transcript
+multi_transcript_df <- read.delim("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/multi_transcript_df_202008.txt")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/transcript_df_062020.RData")
+nrow(transcript_df_single <- transcript_df[-which(transcript_df$site %in% multi_transcript_df$site),]) #515,730
+colnames(multi_transcript_df)[2] <- "acc"
+nrow(master_df <- rbind(multi_transcript_df[,1:2], transcript_df_single[,c(1,3)])) #813,589
+nrow(master_df_hmC <- master_df[master_df$site %in% WT_hmC_gene_list$Name,]) #233,440
+
+#I'll use biomaRt to get the gene names associated with each "longest transcript" per CpG site (with accession as query)
+transcript_df_hits <- master_df_hmC[master_df_hmC$site %in% WT_hmC_gene_list[WT_hmC_gene_list$threshold==TRUE,"Name"],]
+mrna_hits <- transcript_df_hits[grep("NM", transcript_df_hits$acc),] #141
+ncrna_hits <- transcript_df_hits[grep("NR", transcript_df_hits$acc),] #10
+
+mart <- useMart("ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl", host="feb2014.archive.ensembl.org",path="/biomart/martservice",archive=FALSE, verbose=TRUE) #hg19
+#Filters: UCSC refgene accession (want a specific transcript)
+#Attributes: refgene accession, transcript length
+WT_hmC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits$acc, attributes=c("refseq_mrna", "external_gene_id"))
+WT_hmC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna_hits$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+
+WT_hmC_genes <- c(WT_hmC_ncrna_genes$external_gene_id, WT_hmC_prot_genes$external_gene_id)
+```
+
+#getting A30P genes and subsetting WT to unique
+```{r WT hmC unique subset, eval=F}
+#Your hit list of genes - must be a vector of characters
+A30P_hmC_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+
+transcript_df_hits <- master_df_hmC[master_df_hmC$site %in% A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==TRUE,"Name"],]
+mrna_hits <- transcript_df_hits[grep("NM", transcript_df_hits$acc),] #48
+ncrna_hits <- transcript_df_hits[grep("NR", transcript_df_hits$acc),] #0
+
+A30P_hmC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits$acc, attributes=c("refseq_mrna", "external_gene_id"))
+A30P_hmC_genes <- A30P_hmC_prot_genes$external_gene_id
+
+WT_genes_unique <- WT_hmC_genes[-which(WT_hmC_genes %in% A30P_hmC_genes)] #125
+
+#subset the background list to probes with detectable hmC
+anno_hmC <- anno[anno$CpG %in% WT_hmC_gene_list$Name,]
+EPIC_anno_hmC <- data.frame(IDs=as.character(anno_hmC$Gene_name), GeneSymbols=anno_hmC$Gene_name, GeneNames=anno_hmC$Gene_name, GOTerms=anno_hmC$GO_term)
+
+#Run ORA for biological process
+WT_ora <- ora(annotation=EPIC_anno_hmC, hitlist=WT_genes_unique, aspects="Biological Process")
+results <- WT_ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+#none passed this cutoff (multifunctionality or not)
+
+#plot top 10 GO terms
+results <- results %>% arrange(Pval)
+nrow(erminej_sub <- results[results$Pval<=0.05,]) #95
+
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),], aes(biological_process, fill=Pval, y=RawScore))  + scale_fill_gradient(low="gray75", high="gray88") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),]$biological_process, col="black", position=position_fill(0.1), hjust=0) + scale_colour_manual(values="black", guide="none")
+```
+![Top 10 WT unique hmC GO terms passing Pvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/WT_hmC_unique_ORA_nomP_BW_06302020.png)
+
+#ORA analysis: A30P vs control LUHMES cells, hmC
+Here I will perform ORA on a hit list of differentially hydroxymethylated genes between two genotypes of LUHMES dopaminergic neuron cells.
+```{r A30P hmC, eval=F}
+#Your hit list of genes - must be a vector of characters
+A30P_genes_unique <- A30P_hmC_genes[-which(A30P_hmC_genes %in% WT_hmC_genes)] #33
+#Run ORA for biological process
+A30P_ora <- ora(annotation=EPIC_anno_hmC, hitlist=A30P_genes_unique, aspects="Biological Process")
+results <- A30P_ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+erminej_sub <- results[results$CorrectedMFPvalue<=0.05,]
+nrow(erminej_sub[complete.cases(erminej_sub$CorrectedMFPvalue),]) #0
+
+nrow(erminej_sub <- results[results$CorrectedPvalue<=0.05,]) #2 GO terms
+erminej_sub <- erminej_sub %>% arrange(CorrectedPvalue)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub, aes(biological_process, fill=CorrectedPvalue, y=RawScore))  + scale_fill_gradient(low="gray48", high="gray75") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub$biological_process, col="black", position=position_fill(0.1), hjust=0) + scale_colour_manual(values="black", guide="none")
+
+#plot by nominal p-value
+nrow(erminej_sub <- results[results$Pval<=0.05,]) #85 GO terms
+erminej_sub <- erminej_sub %>% arrange(Pval)
+
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),], aes(biological_process, fill=Pval, y=RawScore))  + scale_fill_gradient(low="gray48", high="gray75") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),]$biological_process, col="black", position=position_fill(0.1), hjust=0) + scale_colour_manual(values="white", guide="none")
+```
+![A30P unique hmC GO terms passing CorrectedPvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/A30P_hmC_unique_ORA_corrP_BW.png)
+
+![Top 10 A30P unique hmC GO terms passing Pvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/A30P_hmC_unique_ORA_nomP_BW_082020.png)
+
+#ORA analysis: shared DHM genes between SNCA-OE and A30P LUHMES
+```{r shared hmC, eval=F}
+shared_genes <- A30P_hmC_genes[which(A30P_hmC_genes %in% WT_hmC_genes)] #14
+
+#Run ORA for biological process
+ora <- ora(annotation=EPIC_anno_hmC, hitlist=shared_genes, aspects="Biological Process")
+results <- ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+#none passed this cutoff - will use a nominal pvalue 0.01
+nrow(erminej_sub <- results[results$CorrectedPvalue<=0.05,]) #0
+nrow(erminej_sub <- results[results$Pval<=0.01,]) #14 GO terms
+erminej_sub <- erminej_sub %>% arrange(Pval)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),], aes(biological_process, fill=Pval, y=RawScore))  + scale_fill_gradient(low="gray61", high="gray81") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),]$biological_process, col="black", position=position_fill(0.05), hjust=0) + scale_colour_manual(values="black", guide="none")
+```
+![Top 10 shared hmC GO terms passing Pvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/shared_hmC_ORA_nomP_BW_06302020.png)
+
+
+#ORA analysis: SNCA-OE vs control LUHMES cells, mC
+Here I will perform ORA on a hit list of differentially methylated genes between two genotypes of LUHMES dopaminergic neuron cells.
+```{r WT mC, eval=F}
+#Your hit list of genes - must be a vector of characters
+WT_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+
+transcript_df_hits <- master_df[master_df$site %in% WT_gene_list[WT_gene_list$threshold==TRUE,"Name"],]
+mrna_hits <- transcript_df_hits[grep("NM", transcript_df_hits$acc),] #16581
+ncrna_hits <- transcript_df_hits[grep("NR", transcript_df_hits$acc),] #1457
+
+WT_mC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits$acc, attributes=c("refseq_mrna", "external_gene_id"))
+WT_mC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna_hits$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+
+WT_genes <- c(WT_mC_ncrna_genes$external_gene_id, WT_mC_prot_genes$external_gene_id) #14207
+head(WT_genes)
+```
+
+#Getting A30P genes and subsetting WT genes
+```{r WT mC subset, eval=F}
+#Your hit list of genes - must be a vector of characters
+A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+
+transcript_df_hits <- master_df[master_df$site %in% A30P_gene_list[A30P_gene_list$threshold==TRUE,"Name"],]
+mrna_hits <- transcript_df_hits[grep("NM", transcript_df_hits$acc),] #3811
+ncrna_hits <- transcript_df_hits[grep("NR", transcript_df_hits$acc),] #314
+
+A30P_mC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits$acc, attributes=c("refseq_mrna", "external_gene_id"))
+A30P_mC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna_hits$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+A30P_genes <- c(A30P_mC_ncrna_genes$external_gene_id, A30P_mC_prot_genes$external_gene_id) #3082
+
+WT_genes_unique <- WT_genes[-which(WT_genes %in% A30P_genes)] #7826
+shared_genes <- WT_genes[which(WT_genes %in% A30P_genes)] #6381
+
+#subset the background list to probes with detectable mC
+anno_mC <- anno[anno$CpG %in% WT_gene_list$Name,]
+EPIC_anno_mC <- data.frame(IDs=as.character(anno_mC$Gene_name), GeneSymbols=anno_mC$Gene_name, GeneNames=anno_mC$Gene_name, GOTerms=anno_mC$GO_term)
+
+#Run ORA for biological process
+WT_ora <- ora(annotation=EPIC_anno_mC, hitlist=WT_genes_unique, aspects="Biological Process")
+results <- WT_ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+dim(erminej_sub <- results[results$CorrectedMFPvalue<=0.05,]) #0 GO terms
+dim(erminej_sub <- results[results$CorrectedPvalue<=0.05,]) #11 GO terms
+erminej_sub <- erminej_sub %>% arrange(CorrectedPvalue)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub, aes(biological_process, fill=CorrectedPvalue, y=RawScore))  + scale_fill_gradient(low="gray75", high="gray88") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub$biological_process, col="black", position=position_fill(0.1), hjust=0) + scale_colour_manual(values="black", guide="none")
+```
+![WT GO terms passing CorrectedPvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/WT_mC_unique_ORA_corrP_BW.png)
+
+#ORA analysis: shared DM genes between A30P and SNCA-OE LUHMES, mC
+```{r shared mC, eval=F}
+#Run ORA for biological process
+ora <- ora(annotation=EPIC_anno_mC, hitlist=shared_genes, aspects="Biological Process")
+results <- ora$results
+head(results)
+
+write.table(results, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/ORA_shared_mC.txt", sep="\t")
+
+#subset results to those with adj pval <= 0.05
+nrow(erminej_sub <- results[results$CorrectedMFPvalue<=0.05,]) #34
+erminej_sub <- erminej_sub %>% arrange(CorrectedMFPvalue)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+#in grey
+ggplot(erminej_sub, aes(biological_process, fill=CorrectedMFPvalue, y=RawScore))  + scale_fill_gradient(low="gray61", high="gray91") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub$biological_process, col="black", position=position_fill(0.05), hjust=0) + scale_colour_manual(values="black", guide="none")
+
+#in orange
+ggplot(erminej_sub, aes(biological_process, fill=CorrectedMFPvalue, y=RawScore))  + scale_fill_gradient(low="#cd9168", high="#f2e3d9") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub$biological_process, col="black", position=position_fill(0.05), hjust=0) + scale_colour_manual(values="black", guide="none")
+```
+![Top 10 shared mC GO terms passing CorrectedMFPvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/shared_mC_ORA_MFcorrP_BW.png)
+
+![All shared mC GO terms passing CorrectedMFPvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/shared_mC_ORA_MFcorrP_BW_all.png)
+
+#ORA analysis: A30P vs control LUHMES cells, mC
+Here I will perform ORA on a hit list of differentially methylated genes between two genotypes of LUHMES dopaminergic neuron cells.
+```{r A30P mC, eval=F}
+A30P_genes_unique <- A30P_genes[-which(A30P_genes %in% WT_genes)] #423 genes
+head(A30P_genes)
+
+#Run ORA for biological process
+A30P_ora <- ora(annotation=EPIC_anno_mC, hitlist=A30P_genes_unique, aspects="Biological Process")
+results <- A30P_ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+#none passed this cutoff - will use a nominal pvalue 0.01
+erminej_sub <- results[results$CorrectedMFPvalue<=0.05,] 
+nrow(erminej_sub[complete.cases(erminej_sub$CorrectedMFPvalue),]) #0
+nrow(erminej_sub <- results[results$CorrectedPvalue<=0.05,]) #0
+nrow(erminej_sub <- results[results$Pval<=0.05,]) #93
+erminej_sub <- erminej_sub %>% arrange(Pval)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),], aes(biological_process, fill=CorrectedPvalue, y=RawScore)) + scale_fill_gradient(low="gray48", high="gray75") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),]$biological_process, col="black", position=position_fill(0.01), hjust=0) + scale_colour_manual(values="white", guide="none")
+```
+![Top 10 A30P unique mC GO terms passing Pvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/A30P_mC_unique_ORA_nomP_BW_082020.png)
+
+#ORA analysis: Genes with mC and hmC changes in WT cells
+```{r WT mC hmC, eval=F}
+length(WT_mC_hmC_genes <- WT_genes[WT_genes %in% WT_hmC_genes]) #353
+
+#Run ORA for biological process
+WT_mC_hmC_ora <- ora(annotation=EPIC_anno_hmC, hitlist=WT_mC_hmC_genes, aspects="Biological Process")
+results <- WT_mC_hmC_ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+#none passed this cutoff - will use a nominal pvalue 0.01
+erminej_sub <- results[results$CorrectedMFPvalue<=0.05,] 
+nrow(erminej_sub[complete.cases(erminej_sub$CorrectedMFPvalue),]) #0
+nrow(erminej_sub <- results[results$CorrectedPvalue<=0.05,]) #0
+nrow(erminej_sub <- results[results$Pval<=0.05,]) #119
+erminej_sub <- erminej_sub %>% arrange(Pval)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),], aes(biological_process, fill=Pval, y=RawScore)) + scale_fill_gradient(low="gray75", high="gray88") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),]$biological_process, col="black", position=position_fill(0.01), hjust=0) + scale_colour_manual(values="white", guide="none")
+```
+![Top 10 WT shared mC/hmC GO terms passing Pvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/WT_mC_hmC_ORA_nomP_BW_082020.png)
+
+#ORA analysis: Genes with mC and hmC changes in A30P cells
+```{r A30P mC hmC, eval=F}
+length(A30P_mC_hmC_genes <- A30P_genes[A30P_genes %in% A30P_hmC_genes]) #48
+
+#Run ORA for biological process
+A30P_mC_hmC_ora <- ora(annotation=EPIC_anno_hmC, hitlist=A30P_mC_hmC_genes, aspects="Biological Process")
+results <- A30P_mC_hmC_ora$results
+head(results)
+
+#subset results to those with adj pval <= 0.05
+#none passed this cutoff - will use a nominal pvalue 0.01
+erminej_sub <- results[results$CorrectedMFPvalue<=0.05,] 
+nrow(erminej_sub[complete.cases(erminej_sub$CorrectedMFPvalue),]) #0
+nrow(erminej_sub <- results[results$CorrectedPvalue<=0.05,]) #2
+erminej_sub <- erminej_sub %>% arrange(CorrectedPvalue)
+
+#plot
+#Barplot where x axis is raw score, colour by pval
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub, aes(biological_process, fill=CorrectedPvalue, y=RawScore)) + scale_fill_gradient(low="gray48", high="gray75") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub$biological_process, col="black", position=position_fill(0.01), hjust=0) + scale_colour_manual(values="white", guide="none")
+
+#plotting by nominal p-value
+nrow(erminej_sub <- results[results$Pval<=0.05,]) #104
+erminej_sub <- erminej_sub %>% arrange(Pval)
+
+colnames(erminej_sub)[1] <- "biological_process"
+erminej_sub <- erminej_sub %>% arrange(-row_number())
+erminej_sub$biological_process <- factor(erminej_sub$biological_process, levels = erminej_sub$biological_process)
+
+ggplot(erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),], aes(biological_process, fill=Pval, y=RawScore)) + scale_fill_gradient(low="gray48", high="gray75") + geom_bar(position = position_stack(reverse=TRUE), stat="identity")  +
+ coord_flip() + theme_classic() + theme(axis.text.y=element_blank()) + scale_x_discrete(name="Biological Process") + scale_y_continuous(name="NumGenes") + geom_text(label=erminej_sub[(nrow(erminej_sub)-10):nrow(erminej_sub),]$biological_process, col="black", position=position_fill(0.01), hjust=0) + scale_colour_manual(values="white", guide="none")
+```
+![A30P shared mC/hmC GO terms passing CorrectedPvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/A30P_mC_hmC_ORA_corrP_BW_082020.png)
+
+
+![Top 10 A30P shared mC/hmC GO terms passing Pvalue < 0.05](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/A30P_mC_hmC_ORA_nomP_BW_082020.png)

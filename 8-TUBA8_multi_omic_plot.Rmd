@@ -1,0 +1,423 @@
+##TUBA8 Multi-Omic Plot
+Author: Samantha Schaffner
+Date: April 14, 2021
+
+In this script, I will plot DNAm, DNAhm, and expression at the TUBA8 gene in one plot.
+
+#Read in data
+```{r read in data, eval=F}
+setwd("~/")
+library(methylumi)
+library(lumi)
+library(ggplot2)
+library(dplyr)
+library(DescTools)
+
+#load in methylumi objects for LUHMES DNAm and DNAhm
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_hmC_clean_SS_06182020.RData")
+
+#load in RNAseq results
+RNA_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_WT.csv", skip=1)
+RNA_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_A30P.csv", skip=1)
+```
+
+#Subsetting to TUBA8 and creating a new data frame
+```{r subset TUBA8, eval=F}
+fdat <- fData(mC_methylumi_N)
+length(TUBA8_probes <- fdat[grep("TUBA8",fdat$UCSC_REFGENE_NAME),"TargetID"]) #27
+
+TUBA8_mC <- betas(mC_methylumi_N)
+TUBA8_mC <- TUBA8_mC[rownames(TUBA8_mC) %in% TUBA8_probes,]
+
+#annotate chromosomal position for methylation data
+fdat_sub <- fdat[grep("TUBA8",fdat$UCSC_REFGENE_NAME),] 
+all.equal(rownames(fdat_sub), rownames(TUBA8_mC)) #TRUE
+TUBA8_mC <- as.data.frame(TUBA8_mC)
+TUBA8_mC$pos <- fdat_sub$MAPINFO
+colnames(TUBA8_mC)[1:23] <- c("ctrl1", "WT1", "A30P1", "ctrl2", "WT2", "ctrl3", "A30P2", "A30P3", "A30P4", "WT3", "ctrl4", "WT4", "ctrl5", "WT5", "A30P5", "WT6", "A30P6", "WT7", "ctrl6", "A30P7", "A30P8", "ctrl7", "WT8")
+
+TUBA8_hmC <- hmC_betas_matrix_N[rownames(hmC_betas_matrix_N) %in% TUBA8_probes,]
+fdat_sub_hmC <- fdat[fdat$TargetID %in% rownames(TUBA8_hmC),]
+identical(rownames(fdat_sub_hmC), rownames(TUBA8_hmC)) #TRUE
+TUBA8_hmC <- as.data.frame(TUBA8_hmC)
+TUBA8_hmC$pos <- fdat_sub_hmC$MAPINFO
+colnames(TUBA8_hmC)[1:23] <- c("ctrl1", "WT1", "A30P1", "ctrl2", "WT2", "ctrl3", "A30P2", "A30P3", "A30P4", "WT3", "ctrl4", "WT4", "ctrl5", "WT5", "A30P5", "WT6", "A30P6", "WT7", "ctrl6", "A30P7", "A30P8", "ctrl7", "WT8")
+
+nrow(mC_only_sites <- TUBA8_mC[-which(rownames(TUBA8_mC) %in% rownames(TUBA8_hmC)),]) #15
+hmC_NA <- data.frame(ctrl1=rep(NA, 15), WT1=rep(NA, 15), A30P1=rep(NA, 15), ctrl2=rep(NA, 15),
+                     WT2=rep(NA, 15), ctrl3=rep(NA, 15), A30P2=rep(NA, 15), A30P3=rep(NA, 15),
+                     A30P4=rep(NA, 15), WT3=rep(NA, 15), ctrl4=rep(NA, 15), WT4=rep(NA, 15),
+                     ctrl5=rep(NA, 15), WT5=rep(NA, 15), A30P5=rep(NA, 15), WT6=rep(NA, 15),
+                     A30P6=rep(NA, 15), WT7=rep(NA, 15), ctrl6=rep(NA, 15), A30P7=rep(NA, 15),
+                     A30P8=rep(NA, 15), ctrl7=rep(NA, 15), WT8=rep(NA, 15), pos=mC_only_sites$pos)
+rownames(hmC_NA) <- rownames(mC_only_sites)
+TUBA8_hmC <- rbind(TUBA8_hmC, hmC_NA)
+all(rownames(TUBA8_hmC) %in% rownames(TUBA8_mC)) #TRUE
+TUBA8_hmC$cpg <- rownames(TUBA8_hmC)
+TUBA8_hmC <- TUBA8_hmC %>% arrange(cpg)
+TUBA8_mC$cpg <- rownames(TUBA8_mC)
+TUBA8_mC <- TUBA8_mC %>% arrange(cpg)
+all.equal(TUBA8_hmC$cpg, TUBA8_mC$cpg) #TRUE
+
+TUBA8_mC_melt <- melt(TUBA8_mC, id.vars="pos")
+TUBA8_mC_melt$value <- as.numeric(TUBA8_mC_melt$value)
+TUBA8_mC_melt$Genotype <- rep(NA, nrow(TUBA8_mC_melt))
+TUBA8_mC_melt[grep("ctrl",TUBA8_mC_melt$variable),"Genotype"] <- "Control"
+TUBA8_mC_melt[grep("WT",TUBA8_mC_melt$variable),"Genotype"] <- "SNCA-OE"
+TUBA8_mC_melt[grep("A30P",TUBA8_mC_melt$variable),"Genotype"] <- "A30P"
+
+#calculate group means for drawing lines
+ctrl_group_means <- TUBA8_mC_melt[TUBA8_mC_melt$Genotype=="Control",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+ctrl_group_means$Genotype <- "Control"
+
+A30P_group_means <- TUBA8_mC_melt[TUBA8_mC_melt$Genotype=="A30P",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+A30P_group_means$Genotype <- "A30P"
+
+WT_group_means <- TUBA8_mC_melt[TUBA8_mC_melt$Genotype=="SNCA-OE",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+WT_group_means$Genotype <- "SNCA-OE"
+
+all.equal(ctrl_group_means$pos, WT_group_means$pos, A30P_group_means$pos)
+group_means <- rbind(ctrl_group_means, WT_group_means, A30P_group_means)
+colnames(group_means)[2] <- "value"
+
+#which sites are significantly DM in each genotype?
+WT_DMPs <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+A30P_DMPs <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+TUBA8_WT <- WT_DMPs[grep("TUBA8", WT_DMPs$GencodeBasicV12_NAME),]
+nrow(TUBA8_WT <- TUBA8_WT[TUBA8_WT$threshold==TRUE,]) #9 probes
+TUBA8_A30P <- A30P_DMPs[grep("TUBA8", A30P_DMPs$GencodeBasicV12_NAME),]
+nrow(TUBA8_A30P <- TUBA8_A30P[TUBA8_A30P$threshold==TRUE,]) #9 probes
+all.equal(TUBA8_A30P$Name, TUBA8_WT$Name) #6 same, 3 different
+
+summary(TUBA8_WT$pos)
+summary(TUBA8_A30P$pos)
+sub_positions <- c(TUBA8_WT$pos, TUBA8_A30P$pos)
+
+TUBA8_mC_melt$Genotype <- reorder.factor(TUBA8_mC_melt$Genotype, new.order=c("Control", "SNCA-OE", "A30P"))
+
+ggplot(TUBA8_mC_melt, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=TUBA8_mC_melt) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw() + geom_line(data=group_means, aes(group=group_means$Genotype, colour=as.factor(group_means$Genotype))) + scale_x_continuous("Chromosome 22 Coordinate") + scale_colour_manual(values=c("black", "gray75", "gray48"))
+```
+![DNAm across the TUBA8 gene](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/TUBA8_mC_wholegene_BW.png)
+
+#Zoomed in plot for differentially methylated region
+This region covers the TUBA8 TSS1500 (2 probes), TSS200 (4 probes), 1st Exon/5' UTR (2 probes), and gene body (2 probes).
+```{r TSS1500, eval=F}
+View(fdat[grep("TUBA8",fdat$UCSC_REFGENE_NAME) & fdat$MAPINFO<=18593816 & fdat$MAPINFO>=18593294,c("TargetID","MAPINFO","UCSC_REFGENE_GROUP")])
+
+TUBA8_sub <- TUBA8_mC_melt[TUBA8_mC_melt$pos<=18593816
+ & TUBA8_mC_melt$pos>=18593294
+,]
+group_means_sub <- group_means[group_means$pos<=18593816
+& group_means$pos>=18593294
+,]
+ggplot(TUBA8_sub, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=TUBA8_sub) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw() + geom_line(data=group_means_sub, aes(group=group_means_sub$Genotype, colour=as.factor(group_means_sub$Genotype))) + scale_x_continuous("Chromosome 22 Coordinate") + scale_colour_manual(values=c("black", "gray75", "gray48"))
+```
+![DNAm across TUBA8 DMR](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/TUBA8_DMR_BW.png)
+
+#RNA plot
+```{r mRNA, eval=F}
+nrow(TUBA8_RNA_WT <- RNA_WT[RNA_WT$gene_name%in%"TUBA8",]) #0 - TUBA8 gene was not DE in WT cells
+nrow(TUBA8_RNA_A30P <- RNA_A30P[RNA_A30P$gene_name%in%"TUBA8",]) #0 - TUBA8 gene was not DE in A30P cells
+```
+
+#DNAhm plot
+```{r DNAhm, eval=F}
+#melt hmC sites
+TUBA8_hmC_melt <- melt(TUBA8_hmC, id.vars="pos")
+TUBA8_hmC_melt$value <- as.numeric(TUBA8_hmC_melt$value)
+TUBA8_hmC_melt$Genotype <- rep(NA, nrow(TUBA8_hmC_melt))
+TUBA8_hmC_melt[grep("ctrl",TUBA8_hmC_melt$variable),"Genotype"] <- "Control"
+TUBA8_hmC_melt[grep("WT",TUBA8_hmC_melt$variable),"Genotype"] <- "SNCA-OE"
+TUBA8_hmC_melt[grep("A30P",TUBA8_hmC_melt$variable),"Genotype"] <- "A30P"
+
+#remove sites with NA values
+TUBA8_hmC_melt <- TUBA8_hmC_melt[which(TUBA8_hmC_melt$Genotype %in% c("Control", "SNCA-OE", "A30P")),]
+TUBA8_hmC_melt$Genotype <- reorder.factor(TUBA8_hmC_melt$Genotype, new.order=c("Control", "SNCA-OE", "A30P"))
+TUBA8_hmC_melt <- TUBA8_hmC_melt[complete.cases(TUBA8_hmC_melt),]
+
+#calculate group means for drawing lines
+ctrl_group_means <- TUBA8_hmC_melt[TUBA8_hmC_melt$Genotype=="Control",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+ctrl_group_means$Genotype <- "Control"
+
+A30P_group_means <- TUBA8_hmC_melt[TUBA8_hmC_melt$Genotype=="A30P",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+A30P_group_means$Genotype <- "A30P"
+
+WT_group_means <- TUBA8_hmC_melt[TUBA8_hmC_melt$Genotype=="SNCA-OE",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+WT_group_means$Genotype <- "SNCA-OE"
+
+all.equal(ctrl_group_means$pos, WT_group_means$pos, A30P_group_means$pos)
+group_means <- rbind(ctrl_group_means, WT_group_means, A30P_group_means)
+colnames(group_means)[2] <- "value"
+
+ggplot(TUBA8_hmC_melt, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=TUBA8_hmC_melt) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,0.25)) + theme_bw() + geom_line(data=group_means, aes(group=group_means$Genotype, colour=as.factor(group_means$Genotype))) + scale_x_continuous("Chromosome 22 Coordinate", limits=c(18592265,18614313)) + scale_colour_manual(values=c("black", "gray75", "gray48")) 
+```
+![DNAhm across TUBA8 gene](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/TUBA8_hmC_BW.png)
+
+## Nicole Annotation Figure
+ Load Libraries and Data
+```{r}
+library(plyr)
+library(Gviz)
+library(rtracklayer)
+library(coMET)
+```
+
+###mC
+```{r}
+range <- fdat[rownames(fdat) %in% TUBA8_probes, ]
+TUBA8_chr <- unique(range$CHR)
+TUBA8_max <- max(range$MAPINFO)
+TUBA8_min <- min(range$MAPINFO)
+subbed_fdat <- fdat[fdat$CHR == 22 & (fdat$MAPINFO >= TUBA8_min & fdat$MAPINFO <= TUBA8_max), ]
+betas <- t(betas(mC_methylumi_N)[(featureNames(mC_methylumi_N) %in% rownames(subbed_fdat)),])
+pdat <- pData(mC_methylumi_N)
+pdat$Sample_Label <- gsub(" ", "", pdat$Sample_Label)
+pdat$Sample_Label <- gsub("_", ".", pdat$Sample_Label)
+rownames(pdat) <- pdat$Sample_Label
+# Adding attachment security table
+identical(rownames(betas), rownames(pdat)) #TRUE
+betas <- as.data.frame(cbind(pdat[,"Genotype"], betas))
+colnames(betas)[1] <- "Genotype"
+
+betas.GFP <- betas[betas$Genotype == "GFP",]
+betas.GFP <- betas.GFP[complete.cases(betas.GFP),]
+betas.GFP$Sample <- paste("Control", 1:nrow(betas.GFP), sep = ".")
+rownames(betas.GFP) <- betas.GFP$Sample 
+betas.GFP$Sample <- NULL
+betas.GFP$Genotype <- NULL
+betas.GFP <- as.data.frame(t(betas.GFP))
+betas.GFP$symbol <- rownames(betas.GFP)
+
+betas.WT <- betas[betas$Genotype == "WT",]
+betas.WT <- betas.WT[complete.cases(betas.WT),]
+betas.WT$Sample <- paste("WT aSyn", 1:nrow(betas.WT), sep = ".")
+rownames(betas.WT) <- betas.WT$Sample 
+betas.WT$Sample <- NULL
+betas.WT$Genotype <- NULL
+betas.WT <- as.data.frame(t(betas.WT))
+betas.WT$symbol <- rownames(betas.WT)
+
+betas.A30P <- betas[betas$Genotype == "A30P",]
+betas.A30P <- betas.A30P[complete.cases(betas.A30P),]
+betas.A30P$Sample <- paste("A30P aSyn", 1:nrow(betas.A30P), sep = ".")
+rownames(betas.A30P) <- betas.A30P$Sample 
+betas.A30P$Sample <- NULL
+betas.A30P$Genotype <- NULL
+betas.A30P <- as.data.frame(t(betas.A30P))
+betas.A30P$symbol <- rownames(betas.A30P)
+
+Genotype_betas <- join(betas.GFP, betas.WT)
+Genotype_betas <- join(Genotype_betas, betas.A30P)
+rownames(Genotype_betas) <- Genotype_betas$symbol
+TUBA8_fdat <- fdat[rownames(fdat) %in% rownames(subbed_fdat), c("CHR", "MAPINFO")]
+TUBA8_fdat$genome <- "hg19"
+TUBA8_fdat$symbol <- rownames(TUBA8_fdat)
+Genotype_betas <- join(Genotype_betas, TUBA8_fdat)
+rownames(Genotype_betas) <- Genotype_betas$symbol
+colnames(Genotype_betas)
+Genotype_betas <- Genotype_betas[, c(8, 25:27, 1:7,9:24)]
+colnames(Genotype_betas)
+```
+
+###hmC
+```{r}
+betas <- t(hmC_betas_matrix_N[rownames(hmC_betas_matrix_N) %in% rownames(subbed_fdat),])
+betas <- as.data.frame(cbind(pdat[,"Genotype"], betas))
+colnames(betas)[1] <- "Genotype"
+
+betas.GFP <- betas[betas$Genotype == "GFP",]
+betas.GFP <- betas.GFP[complete.cases(betas.GFP),]
+betas.GFP$Sample <- paste("Control", 1:nrow(betas.GFP), sep = ".")
+rownames(betas.GFP) <- betas.GFP$Sample 
+betas.GFP$Sample <- NULL
+betas.GFP$Genotype <- NULL
+betas.GFP <- as.data.frame(t(betas.GFP))
+betas.GFP$symbol <- rownames(betas.GFP)
+
+betas.WT <- betas[betas$Genotype == "WT",]
+betas.WT <- betas.WT[complete.cases(betas.WT),]
+betas.WT$Sample <- paste("WT aSyn", 1:nrow(betas.WT), sep = ".")
+rownames(betas.WT) <- betas.WT$Sample 
+betas.WT$Sample <- NULL
+betas.WT$Genotype <- NULL
+betas.WT <- as.data.frame(t(betas.WT))
+betas.WT$symbol <- rownames(betas.WT)
+
+betas.A30P <- betas[betas$Genotype == "A30P",]
+betas.A30P <- betas.A30P[complete.cases(betas.A30P),]
+betas.A30P$Sample <- paste("A30P aSyn", 1:nrow(betas.A30P), sep = ".")
+rownames(betas.A30P) <- betas.A30P$Sample 
+betas.A30P$Sample <- NULL
+betas.A30P$Genotype <- NULL
+betas.A30P <- as.data.frame(t(betas.A30P))
+betas.A30P$symbol <- rownames(betas.A30P)
+
+Genotype_betas_hmC <- join(betas.GFP, betas.WT)
+Genotype_betas_hmC <- join(Genotype_betas_hmC, betas.A30P)
+rownames(Genotype_betas_hmC) <- Genotype_betas_hmC$symbol
+TUBA8_fdat <- fdat[rownames(fdat) %in% rownames(subbed_fdat), c("CHR", "MAPINFO")]
+TUBA8_fdat$genome <- "hg19"
+TUBA8_fdat$symbol <- rownames(TUBA8_fdat)
+Genotype_betas_hmC <- join(Genotype_betas_hmC, TUBA8_fdat)
+rownames(Genotype_betas_hmC) <- Genotype_betas_hmC$symbol
+colnames(Genotype_betas_hmC)
+Genotype_betas_hmC <- Genotype_betas_hmC[, c(8, 25:27, 1:7,9:24)]
+colnames(Genotype_betas_hmC)
+```
+
+###Pyro
+```{r}
+TUBA8_pyro <- read.csv("~/KoborLab/kobor_space/BRAINSTORM-KoborGroup/Personal  folders/Samantha/DecipherPD/LUHMES/Pyro/TUBA8_pyro_summary3.csv") #Pyro_Beta is a % while EPIC_Beta is a proportion (0-1)
+TUBA8_pyro$Pyro_Beta <- TUBA8_pyro$Pyro_Beta*0.01
+
+betas <- TUBA8_pyro[TUBA8_pyro$Conversion=="oxBS" & complete.cases(TUBA8_pyro$Pyro_Beta),c("Pos","Pyro_Beta","ID")]
+
+length(unique(betas$ID)) #22
+all_IDs <- unique(betas$ID) #6 GFP, 8 WT, 8 A30P
+length(unique(betas$Pos)) #12
+betas_mat <- matrix(nrow=12, ncol=22)
+for(i in 1:12){
+  print(i)
+  betas_probe <- betas[betas$Pos==unique(betas$Pos)[i],]
+  if (length(extra <- all_IDs[-which(all_IDs %in% betas_probe$ID)])>0){
+    for (j in 1:length(extra)){
+      betas_probe <- rbind(betas_probe, data.frame(Pos=unique(betas_probe$Pos), Pyro_Beta=NA, ID=extra[j]))
+    }
+  }
+  betas_probe <- betas_probe %>% arrange(ID)
+  betas_mat[i,] <- betas_probe$Pyro_Beta
+}
+colnames(betas_mat) <- c("A30P1", "A30P2", "A30P3", "A30P4", "A30P5", "A30P6", "A30P7", "A30P8", "GFP1", "GFP2", "GFP3", "GFP4", "GFP5", "GFP6", "WT1", "WT2", "WT3", "WT4", "WT5", "WT6", "WT7", "WT8")
+rownames(betas_mat) <- unique(betas$Pos)
+betas_mat <- t(betas_mat)
+
+pdat <- pdat %>% arrange(Sample_Label)
+pdat$Sample_Label
+rownames(betas_mat)
+
+betas <- as.data.frame(cbind(pdat[c(1:13,15:23),"Genotype"], betas_mat))
+colnames(betas)[1] <- "Genotype"
+
+betas.GFP <- betas[betas$Genotype == "GFP",]
+#betas.GFP <- betas.GFP[complete.cases(betas.GFP),]
+betas.GFP$Sample <- paste("Control", 1:nrow(betas.GFP), sep = ".")
+rownames(betas.GFP) <- betas.GFP$Sample 
+betas.GFP$Sample <- NULL
+betas.GFP$Genotype <- NULL
+betas.GFP <- as.data.frame(t(betas.GFP))
+betas.GFP$symbol <- rownames(betas.GFP)
+
+betas.WT <- betas[betas$Genotype == "WT",]
+#betas.WT <- betas.WT[complete.cases(betas.WT),]
+betas.WT$Sample <- paste("WT aSyn", 1:nrow(betas.WT), sep = ".")
+rownames(betas.WT) <- betas.WT$Sample 
+betas.WT$Sample <- NULL
+betas.WT$Genotype <- NULL
+betas.WT <- as.data.frame(t(betas.WT))
+betas.WT$symbol <- rownames(betas.WT)
+
+betas.A30P <- betas[betas$Genotype == "A30P",]
+#betas.A30P <- betas.A30P[complete.cases(betas.A30P),]
+betas.A30P$Sample <- paste("A30P aSyn", 1:nrow(betas.A30P), sep = ".")
+rownames(betas.A30P) <- betas.A30P$Sample 
+betas.A30P$Sample <- NULL
+betas.A30P$Genotype <- NULL
+betas.A30P <- as.data.frame(t(betas.A30P))
+betas.A30P$symbol <- rownames(betas.A30P)
+
+Genotype_betas_pyro <- join(betas.GFP, betas.WT)
+Genotype_betas_pyro <- join(Genotype_betas_pyro, betas.A30P)
+rownames(Genotype_betas_pyro) <- Genotype_betas_pyro$symbol
+TUBA8_fdat <- TUBA8_pyro[TUBA8_pyro$Pos %in% colnames(betas),c("Chr","Pos")]
+TUBA8_fdat$genome <- "hg19"
+TUBA8_fdat$symbol <- TUBA8_fdat$Pos
+Genotype_betas_pyro <- join(Genotype_betas_pyro, TUBA8_fdat)
+Genotype_betas_pyro <- distinct(Genotype_betas_pyro)
+rownames(Genotype_betas_pyro) <- Genotype_betas_pyro$symbol
+colnames(Genotype_betas_pyro)
+Genotype_betas_pyro <- Genotype_betas_pyro[, c(7, 24:26, 1:6, 8:23)]
+colnames(Genotype_betas_pyro)
+colnames(Genotype_betas_pyro)[2:3] <- c("CHR", "MAPINFO")
+Genotype_betas_pyro$CHR <- 22
+
+#significance testing
+#ctrl vs WT
+Genotype_betas_pyro$ctrl_WT_pval <- unlist(sapply(1:nrow(Genotype_betas_pyro), function(x) t.test(as.numeric(Genotype_betas_pyro[x,5:10][!is.na(Genotype_betas_pyro[x,5:10])]), as.numeric(Genotype_betas_pyro[x,11:18][!is.na(Genotype_betas_pyro[x,11:18])]))$p.value))
+
+#ctrl vs A30P
+Genotype_betas_pyro$ctrl_A30P_pval <- unlist(sapply(1:nrow(Genotype_betas_pyro), function(x) t.test(as.numeric(Genotype_betas_pyro[x,5:10][!is.na(Genotype_betas_pyro[x,5:10])]), as.numeric(Genotype_betas_pyro[x,19:26][!is.na(Genotype_betas_pyro[x,19:26])]))$p.value))
+```
+
+Producing tracks and making figure
+```{r}
+# Chromosome Track
+TUBA8_itrack <- IdeogramTrack(genome = unique(Genotype_betas$genome), chromosome = paste("chr", unique(Genotype_betas$CHR), sep = ""))
+# Basepair map track
+TUBA8_gtrack <- GenomeAxisTrack(add53 = TRUE, add35 = TRUE, labelPos = "below")
+
+#intron/exon track
+knownGenes <- UcscTrack(genome = "hg19", chromosome = "chr22", 
+                        track = "knownGene", from = min(Genotype_betas$MAPINFO), to = max(Genotype_betas$MAPINFO),
+                        trackType = "GeneRegionTrack", 
+                        rstarts = "exonStarts", rends = "exonEnds", 
+                        gene = "name", symbol = "name", 
+                        transcript = "name", strand = "strand", 
+                        fill = "grey", name = "UCSC Genes")
+  
+
+Genotype_betas[,5:27]<- apply(Genotype_betas[,5:27], 2, function(x) as.numeric(as.character(x)))
+TUBA8_dTrack <- DataTrack(data = Genotype_betas[,5:27], name = "DNAm Beta Value", start = Genotype_betas$MAPINFO, width = 1, chromosome = paste("chr", unique(Genotype_betas$CHR), sep=""), genome = unique(Genotype_betas$genome), groups = rep(c("WT aSyn", "A30P aSyn", "Control"), c(8,8,7)), type = c("a", "p"), col=c("gray75", "#e1620e", "black"), jitter.x=T, factor = 2.5, cex = 1, alpha =1, cex.legend = 1, ylim=c(0,1))
+
+Genotype_betas_hmC[,5:27]<- apply(Genotype_betas_hmC[,5:27], 2, function(x) as.numeric(as.character(x)))
+TUBA8_dTrack_hmC <- DataTrack(data = Genotype_betas_hmC[,5:27], name = "DNAhm Beta Value", start = Genotype_betas_hmC$MAPINFO, width = 1, chromosome = paste("chr", unique(Genotype_betas_hmC$CHR), sep=""), genome = unique(Genotype_betas_hmC$genome), groups = rep(c("WT aSyn", "A30P aSyn", "Control"), c(8,8,7)), type = c("a", "p"), col=c("gray75", "#e1620e", "black"), jitter.x=T, factor = 2.5, cex = 1, alpha =1, cex.legend = 1)
+
+Genotype_betas_pyro[,5:26]<- apply(Genotype_betas_pyro[,5:26], 2, function(x) as.numeric(as.character(x)))
+Genotype_betas_pyro <- Genotype_betas_pyro[Genotype_betas_pyro$MAPINFO<18593500,]
+TUBA8_dTrack_pyro <- DataTrack(data = Genotype_betas_pyro[,5:26], name = "DNAm Beta Value", start = Genotype_betas_pyro$MAPINFO, width = 1, chromosome = paste("chr", unique(Genotype_betas_pyro$CHR), sep=""), genome = unique(Genotype_betas_pyro$genome), groups = rep(c("WT aSyn", "A30P aSyn", "Control"), c(7,8,7)), type = c("a", "p"), col=c("gray75", "#e1620e", "black"), jitter.x=T, factor = 2.5, cex = 1, alpha =1, cex.legend = 1, ylim=c(0,1))
+
+#plotting
+plotTracks(list(TUBA8_itrack, TUBA8_gtrack, knownGenes, TUBA8_dTrack, TUBA8_dTrack_hmC), from = min(Genotype_betas$MAPINFO)-1000, to = max(Genotype_betas$MAPINFO)+100, sizes = c(0.05,0.1,0.1,0.25, 0.25))
+
+#zoomed into DMR
+plotTracks(list(TUBA8_itrack, TUBA8_gtrack, TUBA8_UCSC, TUBA8_dTrack, TUBA8_dTrack_pyro), from = 18593294-10, to = 18593816+10, sizes = c(0.05,0.1,0.1,0.25, 0.25))
+
+#which pyro positions are covered by EPIC and which are unique?
+cpgs <- distinct(TUBA8_pyro[TUBA8_pyro$Pos %in% Genotype_betas_pyro[Genotype_betas_pyro$MAPINFO<18593500,"MAPINFO"],c("Pos","Probe_ID")])
+#       Pos   Probe_ID
+#1 18593365 cg05875032
+#2 18593363 cg20064122
+#3 18593369 cg21949747
+#4 18593378           
+#5 18593432           
+#6 18593434           
+#7 18593442
+
+#3 probes/7 CpGs
+#18593294,18593816
+cpgs[cpgs$Pos>=18593294 & cpgs$Pos<=18593816,]
+```
+![TUBA8 track with intron/exon structure](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/TUBA8_track_intronexon.png)
+
+![TUBA8 track with DMR and pyro data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/TUBA8_track_pyro.png)

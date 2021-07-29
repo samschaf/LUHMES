@@ -1,0 +1,167 @@
+DecipherPD LUHMES EPIC Array Runs - Differential Methylation Analysis
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: June 19, 2020
+
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+I already tested the differences in control cells vs SNCA-OE or A30P cells separately. Next I will directly compare A30P and SNCA-OE (using SNCA-OE as the reference group). Since both genotypes are overexpressed, this will better determine which effects are due to the mutation, controlling for the overexpression.
+
+#Load packages
+```{r load packages, results='hide', eval=F}
+setwd("~/")
+library(DescTools)
+library(wateRmelon)
+# library(lumi)
+library(gridExtra) #For plotting
+library(GEOquery) #For downloading genetic data
+library(wateRmelon) #For model/analyses
+library(limma) #For model/analyses
+library(minfi) #For model/analyses
+library(IlluminaHumanMethylationEPICmanifest)
+library(RColorBrewer) #Colors for plotting
+library(missMethyl)  #For model/analyses
+library(matrixStats) #For data manipulation
+library(Gviz) #For DMR plotting
+library(DMRcate) #For DMR model/analyses
+library(gplots) #For plotting
+library(ggplot2) #For plotting
+library(stringr) #For data manipulation
+library(data.table) #For data manipulation
+library(colorspace) #Colors for plotting
+library(VennDiagram) #Necessary for the overlap counts/venn diagram
+library(methylumi)
+library(parallel)
+library(dplyr)
+library(gtools)
+library(moments)
+library(normtest)
+```
+
+#Load in EPIC annotation and methylumi object
+```{r EPIC anno, eval=F}
+#Assigning annotation information for CpG probes on the EPIC array
+annEPIC <- read.csv("~/KoborLab/kobor_space/shared_coding_resource/Illumina_EPIC/EPIC_KH_Annotation.csv", row.names = 1)
+
+#Load data and meta files
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_hmC_clean_SS_06182020.RData")
+
+#Remove the control group; only comparing SNCA-OE vs A30P
+colnames(hmC_betas_matrix_N)
+dim(hmC_sub <- hmC_betas_matrix_N[,c(2,3,5,7,8,9,10,12,14,15,16,17,18,20,21,23)]) #16
+dim(mC_methylumi_sub <- mC_methylumi_N[,mC_methylumi_N$Genotype %in% c("WT", "A30P")]) #16
+meta <- pData(mC_methylumi_sub)
+```
+
+#Linear model for differential DNAm
+I will use genotype as the only covariate in this analysis since this is a cell line, and the only other confounding factors (passage/collection date) have already been regressed out during batch correction.
+```{r linear model, eval=F}
+#Ensure categorial covariates are factors
+str(meta)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Genotype <- relevel(meta$Genotype, ref="WT") #relevel so A30P is compared to WT
+
+# create the design for the model
+design <- model.matrix(~meta$Genotype)
+
+#fix negative hmC betas
+hmC_sub[hmC_sub<0] <- 0
+# fit the linear model to M-values
+Mvals <- beta2m(hmC_sub)
+fit <- lmFit(Mvals, design)
+
+# fit the contrasts
+fit2 <- eBayes(fit)
+
+# look at the numbers of DM CpGs at FDR < 0.05
+summary(decideTests(fit2))
+#Only 3 probes are significant
+#       (Intercept) meta$GenotypeA30P
+#Down        233439                 1
+#NotSig           1            233437
+#Up               0                 2
+
+# get the table of results for the first contrast (A30P) and second contrast (WT)
+annEPICsub <- annEPIC[match(rownames(Mvals),annEPIC$Name),
+c(1:4,12:19,24:ncol(annEPIC))]
+WT_A30P_DHMPs <- topTable(fit2, num=Inf, coef=2, genelist=annEPICsub)
+```
+
+#Delta beta calculation
+```{r delta betas, eval=F}
+meta$Sample_Label <- gsub("ox", "BS", meta$Sample_Label)
+head(meta$Sample_Label)
+
+LUHMES_hmC_betas <- as.data.frame(hmC_sub)
+colnames(LUHMES_hmC_betas) <- gsub("_", ".", colnames(LUHMES_hmC_betas))
+colnames(LUHMES_hmC_betas) <- gsub(" ", "", colnames(LUHMES_hmC_betas))
+head(colnames(LUHMES_hmC_betas))
+
+hmC_A30P <- LUHMES_hmC_betas[,grep("A30P", colnames(LUHMES_hmC_betas))]
+hmC_WT <- LUHMES_hmC_betas[,grep("WT", colnames(LUHMES_hmC_betas))]
+delbeta_hmC_WT_A30P <- rowMeans(hmC_A30P) - rowMeans(hmC_WT)
+```
+
+# Volcano plot
+```{r volcano, eval=F}
+#Add DBs to topTable result
+WT_A30P_gene_list <- WT_A30P_DHMPs
+WT_A30P_gene_list <- WT_A30P_gene_list %>% arrange(Name)
+delbeta_df <- data.frame(names(delbeta_hmC_WT_A30P), delbeta_hmC_WT_A30P)
+colnames(delbeta_df) <- c("Name", "DB")
+delbeta_df <- delbeta_df %>% arrange(Name)
+all.equal(as.character(delbeta_df$Name), as.character(WT_A30P_gene_list$Name))
+WT_A30P_gene_list$DB <- delbeta_df$DB
+WT_A30P_gene_list$threshold <- (abs(WT_A30P_gene_list$DB) >= 0.05 & WT_A30P_gene_list$adj.P.Val <= 0.05)
+summary(WT_A30P_gene_list$threshold) #1
+WT_A30P_gene_list <- WT_A30P_gene_list %>% arrange(desc(abs(DB)))
+
+##Construct the volcano plot
+WT_A30P_gene_list$DNAm_change <- WT_A30P_gene_list$threshold
+WT_A30P_gene_list[WT_A30P_gene_list$threshold==TRUE & WT_A30P_gene_list$DB>0,]$DNAm_change <- "Increase"
+#WT_A30P_gene_list[WT_A30P_gene_list$threshold==TRUE & WT_A30P_gene_list$DB<0,]$DNAm_change <- "Decrease"
+WT_A30P_gene_list[WT_A30P_gene_list$threshold==FALSE,]$DNAm_change <- "NS"
+summary(as.factor(WT_A30P_gene_list$DNAm_change)) #0 with decreased DNAhm, 1 with increased DNAhm
+write.csv(WT_A30P_gene_list, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_A30P_06192020.csv")
+
+#D'Agostino's test for skeweness on delta betas
+#sample size must be between 8 and 46340 - randomly sample the max number
+WT_A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_A30P_06192020.csv")
+agostino.test(sample(WT_A30P_gene_list$DB, 46340))
+#	D'Agostino skewness test
+#
+#data:  sample(WT_A30P_gene_list$DB, 46340)
+#skew = 0.43394, z = 36.54336, p-value < 2.2e-16
+#alternative hypothesis: data have a skewness
+
+#Shapiro-wilk test for skewness (similar to D'Agostino)
+skewness.norm.test(WT_A30P_gene_list$DB, nrepl=1000)
+#	Skewness test for normality
+#
+#data:  WT_A30P_gene_list$DB
+#T = 0.45102, p-value < 2.2e-16
+
+#plot with adjusted p
+ggplot(data=WT_A30P_gene_list, aes(x=DB, y=-log10(adj.P.Val), colour=DNAm_change)) +
+  geom_point(alpha=0.4, size=1.75) +
+  labs(legend.position = "none") +
+  xlab("Delta Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("blue","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,6)) + xlim(c(-0.2,0.2)) #ylim chosen to match graphs from other comparisons
+
+#colour by hits unique to each group vs shared
+WT_A30P_gene_list$Category <- rep("None", nrow(WT_A30P_gene_list))
+WT_A30P_gene_list[WT_A30P_gene_list$Name %in% A30P_hmC_top20$Name,"Category"] <- "A30P aSyn unique"
+WT_A30P_gene_list[WT_A30P_gene_list$Name %in% WT_hmC_top20$Name,"Category"] <- "WT aSyn unique"
+WT_A30P_gene_list[WT_A30P_gene_list$Name %in% shared_hmC_top20$Name,"Category"] <- "WT and A30P aSyn"
+WT_A30P_gene_list$Category <- factor(WT_A30P_gene_list$Category, levels=WT_A30P_gene_list$Category)
+WT_A30P_gene_list$Category <- reorder.factor(WT_A30P_gene_list$Category, new.order=c("WT aSyn unique", "A30P aSyn unique", "WT and A30P aSyn", "None"))
+
+ggplot(data=WT_A30P_gene_list, aes(x=DB, y=-log10(adj.P.Val), colour=Category, alpha=Category)) +
+  geom_point(size=1.75) + scale_alpha_manual(values=c(1,1,1,0.05)) +
+  labs(legend.position = "none") +
+  xlab("Delta Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("orange","purple","black","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,6))
+```
+![Volcano plot: SNCA-OE vs A30P (hmC)](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_hmC_WT_A30P_06222020.png)
+
+![Volcano plot: SNCA-OE vs A30P (hmC), by category](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_WT_A30P_hmC_category.png)

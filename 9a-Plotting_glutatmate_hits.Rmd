@@ -1,0 +1,206 @@
+##Plotting glutamate signaling GO hits
+Author: Samantha Schaffner
+Date: June 5, 2020
+
+Gene ontology analysis with ermineR revealed strong enrichment for glutatamte receptor signaling pathways in SNCA-OE cells. Here, I will plot DNAm levels at probes mapping to these GO terms which were differentially methylated in at least one comparison.
+
+#Libraries
+```{r libraries, eval=F}
+library(heatmap.plus)
+library(gplots)
+library(RColorBrewer)
+library(dplyr)
+library(SDMTools)
+library(DescTools)
+#changed the heatmap.plus() function so it plots correctly with one ColSideColors label - before, it attempted to take the number of rows of ColSideCols (line 142). When there is one vector, should use length() instead to return a value - replaced dim(csc)[1] with length().
+#changed dim(csc)[2] in line 145 to 1
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap.plus_oneColSide.R')
+```
+
+#Retrieving probes associated with glutamate signaling
+Focusing on the two pathways enriched in SNCA-OE cells: "glutamate receptor signaling" and "ionotropic glutamate receptor signaling."
+```{r glut probes, eval=F}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/iontrop_genes.RData") #24 genes
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/glurecp_genes.RData") #44 genes
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+
+#get all probes that lie in these genes
+fdat <- fData(mC_methylumi_N)
+fdat_glurecp <- NULL
+for (i in 1:length(glurecp_genes)){
+  print(i)
+  fdat_sub <- fdat[grep(glurecp_genes[i], fdat$GENCODEBASICV12_NAME),]
+  fdat_glurecp <- rbind(fdat_sub, fdat_glurecp)
+}
+
+#get the probes in these genes that were significantly DM in WT...
+WT_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+WT_glut_probes <- WT_gene_list[WT_gene_list$Name %in% fdat_glurecp$NAME & WT_gene_list$threshold==TRUE,] #127 (/2249 total probes in fdat)
+
+A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+A30P_glut_probes <- A30P_gene_list[A30P_gene_list$Name %in% fdat_glurecp$NAME & A30P_gene_list$threshold==TRUE,] #18 (/2249 total probes in fdat)
+all_hits <- unique(c(as.character(WT_glut_probes$Name), as.character(A30P_glut_probes$Name))) #129 unique sites DM in either/both genotypes
+all_hits <- sort(all_hits)
+```
+
+#Heat map
+```{r heat map, eval=F}
+Bvals <- betas(mC_methylumi_N)
+meta <- pData(mC_methylumi_N)
+all.equal(rownames(meta), colnames(Bvals))
+all_betas <- Bvals[rownames(Bvals) %in% all_hits,]
+Bu <- brewer.pal(n=9, "Blues")
+
+#arrange/colour columns (samples) by genotype
+all_betas <-all_betas[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+meta$Genotype.1 <- meta$Genotype
+meta$Genotype.1 <- gsub("GFP", "A", gsub("WT", "B", gsub("A30P", "C", meta$Genotype.1)))
+meta <- meta %>% arrange(Genotype.1)
+genotypeCol <- meta$Genotype
+genotypeCol <- gsub("GFP", "black", gsub("WT", "gray75", gsub("A30P", "gray48", genotypeCol)))
+genotypeLab <- meta$Genotype
+genotypeLab <- gsub("GFP", "Control", gsub("WT", "SNCA-OE", genotypeLab))
+
+#colour rows (probes) by GO category
+iontropCol <- all_hits
+for (i in 1:length(all_hits)){
+  print(i)
+  gene <- fdat_glurecp[fdat_glurecp$NAME==all_hits[i],"GENCODEBASICV12_NAME"]
+  if (gene %in% iontrop_genes){
+    iontropCol <- gsub(iontropCol[i], "white", iontropCol)
+  }
+  else { iontropCol <- gsub(iontropCol[i], "black", iontropCol) }
+}
+summary(as.factor(iontropCol)) #19 in "ionotropic" pathway, 110 unique to "glutamate receptor" pathway
+
+#colour rows (probes) by significance
+WTsigCol <- all_hits
+length(all_hits[all_hits %in% WT_glut_probes$Name]) #127
+for (i in 1:length(all_hits)){
+  print(i)
+  if (all_hits[i] %in% WT_glut_probes$Name == TRUE){
+    if (WT_glut_probes[WT_glut_probes$Name==all_hits[i],"DB"]>0){
+    WTsigCol <- gsub(WTsigCol[i], "blue", WTsigCol)
+    }
+    if (WT_glut_probes[WT_glut_probes$Name==all_hits[i],"DB"]<0){
+    WTsigCol <- gsub(WTsigCol[i], "red", WTsigCol)
+    }}
+
+  else if (all_hits[i] %in% WT_glut_probes$Name == FALSE)
+  { WTsigCol <- gsub(WTsigCol[i], "black", WTsigCol) }
+}
+summary(as.factor(WTsigCol))
+#black  blue   red 
+#    2    45    82 
+    
+A30PsigCol <- all_hits
+length(all_hits[all_hits %in% A30P_glut_probes$Name]) #18
+for (i in 1:length(all_hits)){
+  print(i)
+  if (all_hits[i] %in% A30P_glut_probes$Name == TRUE){
+    if (A30P_glut_probes[A30P_glut_probes$Name==all_hits[i],"DB"]>0){
+    A30PsigCol <- gsub(A30PsigCol[i], "blue", A30PsigCol)
+    }
+    if (A30P_glut_probes[A30P_glut_probes$Name==all_hits[i],"DB"]<0){
+    A30PsigCol <- gsub(A30PsigCol[i], "red", A30PsigCol)
+    }}
+  else if (all_hits[i] %in% A30P_glut_probes$Name == FALSE)
+  { A30PsigCol <- gsub(A30PsigCol[i], "black", A30PsigCol) }
+}
+summary(as.factor(A30PsigCol))
+#black  blue   red 
+#  111     9     9 
+  
+#heat map
+glut_betas <- Bvals[rownames(Bvals) %in% all_hits,]
+glut_betas <- glut_betas[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+all.equal(rownames(glut_betas), all_hits) #TRUE
+glut_betas <- as.matrix(glut_betas[,1:23])
+
+rowCol <- cbind(iontropCol, WTsigCol, A30PsigCol)
+colCol <- as.matrix(genotypeCol)
+colnames(colCol) <- "genotypeCol"
+
+glut_betas <- as.data.frame(glut_betas)
+glut_betas$iontropCol <- iontropCol
+glut_betas$WTsigCol <- WTsigCol
+glut_betas$A30PsigCol <- A30PsigCol
+glut_betas <- glut_betas %>% arrange(A30PsigCol)
+glut_betas <- glut_betas %>% arrange(WTsigCol)
+glut_betas <- glut_betas %>% arrange(iontropCol)
+colnames(glut_betas)[24:26] <- c("GO:0035235", "Ctrl vs SNCA-OE", "Ctrl vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(glut_betas[,1:23]), RowSideColors=as.matrix(glut_betas[,24:26]), ColSideColors = colCol, labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend(0.8,0.91,legend=c("In GO:0035235","","TRUE","FALSE", "", "",
+                          "Direction of DNAm change", "", "Decrease", "Increase", "NS"), fill=c("white", "white", "white","black", "white", "white",
+                                                                                   "white", "white", "red","blue", "black", "white"), border=FALSE, bty="n", y.intersp = 0.8, cex=0.7)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value",limits=c(round(min(glut_betas[,1:23]),2), round(max(glut_betas[,1:23]),2)))
+```
+![Heat map of DM probes in glutamate signaling pathways](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_glut_06302020.png)
+
+#Plot some of the top DM sites
+```{r plot DM sites, eval=F}
+length(WT_glut_probes_unique <- WT_glut_probes$Name[-which(WT_glut_probes$Name %in% A30P_glut_probes$Name)]) #111
+length(A30P_glut_probes_unique <- A30P_glut_probes$Name[-which(A30P_glut_probes$Name %in% WT_glut_probes$Name)]) #2
+length(shared_glut_probes <- A30P_glut_probes$Name[which(A30P_glut_probes$Name %in% WT_glut_probes$Name)]) #16
+
+#WT unique (2 examples)
+WT_hits <- WT_glut_probes_unique[WT_glut_probes_unique %in% c("cg00339514","cg00518386")] 
+#cg00339514, GRIA3 TSS1500 (north shore)
+#cg00518386, GRIN2A TSS1500 (cpg island)
+Bvals_sub <- Bvals[rownames(Bvals) %in%WT_hits,]
+betas_melt <- melt(Bvals_sub)
+#meta$Sample_Label <- rownames(meta)
+meta$lab <- meta$Sample_Label
+meta$lab <- gsub("_",".", meta$Sample_Label)
+
+meta_rep <- rbind(meta, meta) #2
+meta_rep <- meta_rep %>% arrange(meta_rep$lab)
+betas_melt <- betas_melt %>% arrange(as.character(Var2))
+all.equal(as.character(betas_melt$Var2), meta_rep$lab) #4 string mismatches - because of extra spaces in sample names. Upon visual inspection, they do match
+betas_melt$Genotype <- meta_rep$Genotype
+
+betas_melt$Genotype <- reorder.factor(betas_melt$Genotype, new.order=c("GFP","WT","A30P"))
+colnames(betas_melt) <- c("cpg", "ID", "beta", "Genotype")
+
+ggplot(aes(x=Genotype, y=beta, group=Genotype), data=betas_melt) + geom_boxplot(aes(col=Genotype), data=betas_melt, show.legend = FALSE) + theme_bw() + scale_colour_manual(values=c("black", "gray75", "gray48"), labels=c("Control", "SNCA_OE", "A30P")) + ylim(c(0,1)) + facet_wrap(~cpg) + geom_jitter(aes(colour=Genotype)) + theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+```
+![Examples of DM probes unique to SNCA-OE](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_glut_WT_BW.png)
+
+#A30P unique
+```{r A30P unique, eval=F}
+A30P_hits <- A30P_glut_probes_unique
+#cg06562836, GRIA1 body
+#cg15852795, GRIK1 body
+Bvals_sub <- Bvals[rownames(Bvals) %in%A30P_hits,]
+betas_melt <- melt(Bvals_sub)
+#meta$Sample_Label <- rownames(meta)
+betas_melt <- betas_melt %>% arrange(as.character(Var2))
+identical(as.character(betas_melt$Var2), meta_rep$lab)
+betas_melt$Genotype <- meta_rep$Genotype
+
+betas_melt$Genotype <- reorder.factor(betas_melt$Genotype, new.order=c("GFP","WT","A30P"))
+colnames(betas_melt) <- c("cpg", "ID", "beta", "Genotype")
+
+ggplot(aes(x=Genotype, y=beta, group=Genotype), data=betas_melt) + geom_boxplot(aes(col=Genotype), data=betas_melt, show.legend = FALSE) + theme_bw() + scale_colour_manual(values=c("black", "gray75", "gray48"), labels=c("Control", "SNCA_OE", "A30P")) + ylim(c(0,1)) + facet_wrap(~cpg) + geom_jitter(aes(colour=Genotype)) + theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+```
+![DM probes unique to A30P](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/glut_probes_A30P_BW.png)
+
+#Shared
+```{r shared, eval=F}
+shared_hits <- shared_glut_probes[3:4]
+#cg09403155, PAPPA2 5' UTR
+#cg26710276, GRM3 5' UTR
+Bvals_sub <- Bvals[rownames(Bvals) %in% c("cg09403155", "cg26710276"),]
+betas_melt <- melt(Bvals_sub)
+#meta$Sample_Label <- rownames(meta)
+betas_melt <- betas_melt %>% arrange(as.character(Var2))
+identical(as.character(betas_melt$Var2), meta_rep$lab)
+betas_melt$Genotype <- meta_rep$Genotype
+
+betas_melt$Genotype <- reorder.factor(betas_melt$Genotype, new.order=c("GFP","WT","A30P"))
+colnames(betas_melt) <- c("cpg", "ID", "beta", "Genotype")
+
+ggplot(aes(x=Genotype, y=beta, group=Genotype), data=betas_melt) + geom_boxplot(aes(col=Genotype), data=betas_melt, show.legend = FALSE) + theme_bw() + scale_colour_manual(values=c("black", "gray75", "gray48"), labels=c("Control", "SNCA_OE", "A30P")) + ylim(c(0,1)) + facet_wrap(~cpg) + geom_jitter(aes(colour=Genotype)) + theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+```
+![Examples of shared DM probes](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/glut_probes_shared_BW.png)

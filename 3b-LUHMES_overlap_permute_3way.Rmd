@@ -1,0 +1,617 @@
+DecipherPD LUHMES EPIC Array Runs - Differential Methylation Analysis
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: June 18, 2020
+
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+I performed 3 differential methylation comparisons: control vs WTaSyn, control vs A30P, and WTaSyn vs A30P. Here I will permute the number of probes which overlap in each comparison to see if it is more or less than expected by chance.
+
+```{r libraries, results='hide', eval=F}
+setwd("~/")
+library(wateRmelon)
+library(Sushi)
+library(IlluminaHumanMethylation450k.db)
+library(lumi)
+library(ggfortify) #For plotting
+library(gridExtra) #For plotting
+library(plotly) #For plotting
+library(GEOquery) #For downloading genetic data
+library(wateRmelon) #For model/analyses
+library(limma) #For model/analyses
+library(minfi) #For model/analyses
+library(IlluminaHumanMethylationEPICanno.ilmn10b2.hg19) #Gene annotation for analyses
+library(IlluminaHumanMethylationEPICmanifest)
+library(RColorBrewer) #Colors for plotting
+library(missMethyl)  #For model/analyses
+library(matrixStats) #For data manipulation
+library(minfiData) #For model/analyses
+library(Gviz) #For DMR plotting
+library(DMRcate) #For DMR model/analyses
+library(gplots) #For plotting
+library(ggplot2) #For plotting
+library(stringr) #For data manipulation
+library(tidyverse) #For data manipulation
+library(data.table) #For data manipulation
+library(colorspace) #Colors for plotting
+library(VennDiagram) #Necessary for the overlap counts/venn diagram
+library(qpcR) #Necessary for the overlap counts/venn diagram
+library(methylumi)
+library(parallel)
+library(dplyr)
+```
+
+#Permute overlaps
+Using linear modeling, a certain number of significant probes that were unique to each genotype and shared between each genotype were identified.
+
+I will pull two random sets of the same number of probes representing simulated WT/A30P sets, and calculate the degree of overlap in 1000 permutations. Each iteration of overlap greater than the real number will be counted toward the enrichment p value, while each iteration less than the real number will be counted toward the depletion p value.
+
+```{r perm, eval=F}
+overlap_permutation_3way <- function(CpG_list_1, CpG_list_2, CpG_list_3, background.probes, permutation_number){
+  
+  #real overlaps
+  real_overlap12 <- CpG_list_1[CpG_list_1 %in% CpG_list_2]
+  real_overlap13 <- CpG_list_1[CpG_list_1 %in% CpG_list_3]
+  real_overlap23 <- CpG_list_2[CpG_list_2 %in% CpG_list_3]
+  real_overlap123 <- real_overlap12[real_overlap12 %in% CpG_list_3]
+  #collapsing to numbers
+  real_overlap12 <- length(real_overlap12[-which(real_overlap12 %in% real_overlap123)])
+  real_overlap13 <- length(real_overlap13[-which(real_overlap13 %in% real_overlap123)])
+  real_overlap23 <- length(real_overlap23[-which(real_overlap23 %in% real_overlap123)])
+  real_overlap123 <- length(real_overlap123)
+  
+  ################ Boot strapping for Group1-Group2-Group3 overlap
+  bootstrap_overlap123 <-lapply(1:permutation_number, function(x){
+    set.seed(x)
+    
+    #take 3 random samples of all probes, same size as your hit lists
+    hitlist1 <-background.probes[sample(1:length(background.probes),length(CpG_list_1))]
+    hitlist2 <-background.probes[sample(1:length(background.probes),length(CpG_list_2))]
+    hitlist3 <-background.probes[sample(1:length(background.probes),length(CpG_list_3))]
+    
+    #get lists of overlaps for the random sample of probes
+    rnd_overlap12 <- hitlist1[hitlist1 %in% hitlist2]
+    #rnd_overlap13 <- hitlist1[hitlist1 %in% hitlist3]
+    #rnd_overlap23 <- hitlist2[hitlist2 %in% hitlist3]
+    rnd_overlap123 <- rnd_overlap12[rnd_overlap12 %in% hitlist3]
+    
+    #get number of overlaps for the random sample of probes
+    #rnd_overlap12 <- length(rnd_overlap12[-which(rnd_overlap12 %in% rnd_overlap123)])
+    #rnd_overlap13 <- length(rnd_overlap13[-which(rnd_overlap13 %in% rnd_overlap123)])
+    #rnd_overlap23 <- length(rnd_overlap23[-which(rnd_overlap23 %in% rnd_overlap123)])
+    rnd_overlap123 <- length(rnd_overlap123)
+    rnd_overlap123
+  })
+  #bind together each permutation
+  bootstrap_overlap123<-do.call(rbind, bootstrap_overlap123)
+  
+  ############ Boot strapping for Group1-Group2 overlap
+  bootstrap_overlap12 <-lapply(1:permutation_number, function(x){
+    set.seed(x)
+    
+    #take 3 random samples of all probes, same size as your hit lists
+    hitlist1 <-background.probes[sample(1:length(background.probes),length(CpG_list_1))]
+    hitlist2 <-background.probes[sample(1:length(background.probes),length(CpG_list_2))]
+    hitlist3 <-background.probes[sample(1:length(background.probes),length(CpG_list_3))]
+    
+    #get lists of overlaps for the random sample of probes
+    rnd_overlap12 <- hitlist1[hitlist1 %in% hitlist2]
+    #rnd_overlap13 <- hitlist1[hitlist1 %in% hitlist3]
+    #rnd_overlap23 <- hitlist2[hitlist2 %in% hitlist3]
+    rnd_overlap123 <- rnd_overlap12[rnd_overlap12 %in% hitlist3]
+    
+    #get number of overlaps for the random sample of probes
+    rnd_overlap12 <- length(rnd_overlap12[-which(rnd_overlap12 %in% rnd_overlap123)])
+    #rnd_overlap13 <- length(rnd_overlap13[-which(rnd_overlap13 %in% rnd_overlap123)])
+    #rnd_overlap23 <- length(rnd_overlap23[-which(rnd_overlap23 %in% rnd_overlap123)])
+    #rnd_overlap123 <- length(rnd_overlap123)
+    rnd_overlap12
+  })
+  #bind together each permutation
+  bootstrap_overlap12<-do.call(rbind, bootstrap_overlap12)
+
+  ############ Boot strapping for Group1-Group3 overlap
+  bootstrap_overlap13 <-lapply(1:permutation_number, function(x){
+    set.seed(x)
+    
+    #take 3 random samples of all probes, same size as your hit lists
+    hitlist1 <-background.probes[sample(1:length(background.probes),length(CpG_list_1))]
+    hitlist2 <-background.probes[sample(1:length(background.probes),length(CpG_list_2))]
+    hitlist3 <-background.probes[sample(1:length(background.probes),length(CpG_list_3))]
+    
+    #get lists of overlaps for the random sample of probes
+    #rnd_overlap12 <- hitlist1[hitlist1 %in% hitlist2]
+    rnd_overlap13 <- hitlist1[hitlist1 %in% hitlist3]
+    #rnd_overlap23 <- hitlist2[hitlist2 %in% hitlist3]
+    rnd_overlap123 <- rnd_overlap13[rnd_overlap13 %in% hitlist2]
+    
+    #get number of overlaps for the random sample of probes
+    #rnd_overlap12 <- length(rnd_overlap12[-which(rnd_overlap12 %in% rnd_overlap123)])
+    rnd_overlap13 <- length(rnd_overlap13[-which(rnd_overlap13 %in% rnd_overlap123)])
+    #rnd_overlap23 <- length(rnd_overlap23[-which(rnd_overlap23 %in% rnd_overlap123)])
+    #rnd_overlap123 <- length(rnd_overlap123)
+    rnd_overlap13
+  })
+  #bind together each permutation
+  bootstrap_overlap13<-do.call(rbind, bootstrap_overlap13)
+  
+  ############ Boot strapping for Group2-Group3 overlap
+  bootstrap_overlap23 <-lapply(1:permutation_number, function(x){
+    set.seed(x)
+    
+    #take 3 random samples of all probes, same size as your hit lists
+    hitlist1 <-background.probes[sample(1:length(background.probes),length(CpG_list_1))]
+    hitlist2 <-background.probes[sample(1:length(background.probes),length(CpG_list_2))]
+    hitlist3 <-background.probes[sample(1:length(background.probes),length(CpG_list_3))]
+    
+    #get lists of overlaps for the random sample of probes
+    #rnd_overlap12 <- hitlist1[hitlist1 %in% hitlist2]
+    #rnd_overlap13 <- hitlist1[hitlist1 %in% hitlist3]
+    rnd_overlap23 <- hitlist2[hitlist2 %in% hitlist3]
+    rnd_overlap123 <- rnd_overlap23[rnd_overlap23 %in% hitlist1]
+    
+    #get number of overlaps for the random sample of probes
+    #rnd_overlap12 <- length(rnd_overlap12[-which(rnd_overlap12 %in% rnd_overlap123)])
+    #rnd_overlap13 <- length(rnd_overlap13[-which(rnd_overlap13 %in% rnd_overlap123)])
+    rnd_overlap23 <- length(rnd_overlap23[-which(rnd_overlap23 %in% rnd_overlap123)])
+    #rnd_overlap123 <- length(rnd_overlap123)
+    rnd_overlap23
+  })
+  #bind together each permutation
+  bootstrap_overlap23<-do.call(rbind, bootstrap_overlap23)
+  
+  print("Permutation P values for enrichment and depletion")
+
+    #how many iterations of bootstrapping found MORE overlapping probes than the real number? Divide this by the number of permutations to get a p-value
+    enrich_p12 <-length(which(bootstrap_overlap12>=real_overlap12))/permutation_number
+    enrich_p13 <-length(which(bootstrap_overlap13>=real_overlap13))/permutation_number
+    enrich_p23 <-length(which(bootstrap_overlap23>=real_overlap23))/permutation_number
+    enrich_p123 <-length(which(bootstrap_overlap123>=real_overlap123))/permutation_number
+    #how many iterations of bootstrapping found LESS overlapping probes than the real number? Divide this by the number of permutations to get a p-value
+    depletion_p12<-length(which(bootstrap_overlap12<=real_overlap12))/permutation_number
+    depletion_p13<-length(which(bootstrap_overlap13<=real_overlap13))/permutation_number
+    depletion_p23<-length(which(bootstrap_overlap23<=real_overlap23))/permutation_number
+    depletion_p123<-length(which(bootstrap_overlap123<=real_overlap123))/permutation_number
+    
+    print(paste("Enrichment Group1-Group2: ", enrich_p12, "; Depletion Group1-Group2: ", depletion_p12,sep=""))
+    
+    print(paste("Enrichment Group1-Group3: ", enrich_p13, "; Depletion Group1-Group3: ", depletion_p13,sep=""))
+        
+    print(paste("Enrichment Group2-Group3: ", enrich_p23, "; Depletion Group2-Group3: ", depletion_p23,sep=""))
+            
+    print(paste("Enrichment Group1-Group2-Group3: ", enrich_p123, "; Depletion Group1-Group2-Group3: ", depletion_p123,sep=""))
+  }
+  
+
+#Methyl
+WT_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+WT_A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_06182020.csv")
+nrow(WT_ctrl_hits <- WT_gene_list[WT_gene_list$threshold==TRUE,]) #29333
+nrow(A30P_ctrl_hits <- A30P_gene_list[A30P_gene_list$threshold==TRUE,]) #6529
+nrow(A30P_WT_hits <- WT_A30P_gene_list[WT_A30P_gene_list$threshold==TRUE,]) #9680
+
+background.probes <- WT_gene_list$Name
+permutation_number <- 10000
+
+overlap_permutation_3way(WT_ctrl_hits$Name, A30P_ctrl_hits$Name, A30P_WT_hits$Name, background.probes, 10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment Group1-Group2: 0; Depletion Group1-Group21"
+#[1] "Enrichment Group1-Group3: 0; Depletion Group1-Group31"
+#[1] "Enrichment Group2-Group3: 0; Depletion Group2-Group31"
+#[1] "Enrichment Group1-Group2-Group3: 0; Depletion Group1-Group2-Group3: 1"
+```
+
+All comparisons are highly significant - more probes overlap in every direction than expected by chance. Note results were the same between 1000 and 10000 permutations.
+
+#Heat maps for overlapping hits
+I'd like to explore the DNAm patterns across genotypes further in each of these groups. I'll start by plotting the hits in heat maps.
+
+##Overlaps between all 3 comparisons
+```{r heat map 3way, eval=F}
+#getting probe names
+overlap_all <- WT_ctrl_hits$Name[WT_ctrl_hits$Name %in% A30P_ctrl_hits$Name & WT_ctrl_hits$Name %in% A30P_WT_hits$Name]
+
+#getting beta values
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+Bvals <- betas(mC_methylumi_N)
+Bvals_sub <- Bvals[rownames(Bvals) %in% overlap_all,]
+
+library(RColorBrewer)
+Bu <- brewer.pal(n=9, "Blues")
+
+#arrange/colour columns (samples) by genotype
+library(dplyr)
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+meta <- pData(mC_methylumi_N)
+meta$Genotype.1 <- meta$Genotype
+meta$Genotype.1 <- gsub("GFP", "A", gsub("WT", "B", gsub("A30P", "C", meta$Genotype.1)))
+meta <- meta %>% arrange(Genotype.1)
+genotypeCol <- meta$Genotype
+genotypeCol <- gsub("GFP", "black", gsub("WT", "gray75", gsub("A30P", "gray48", genotypeCol)))
+genotypeLab <- meta$Genotype
+genotypeLab <- gsub("GFP", "Control", gsub("WT", "SNCA-OE", genotypeLab))
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_ctrl_hits[WT_ctrl_hits$Name %in% overlap_all,c("Name","DB")]
+WTsigCol <- WTsigCol[match(overlap_all, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+#blue  red 
+# 401  425 
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_ctrl_hits[A30P_ctrl_hits$Name %in% overlap_all,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(overlap_all, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+#blue  red 
+# 400  426 
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- A30P_WT_hits[A30P_WT_hits$Name %in% overlap_all,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(overlap_all, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+#blue  red 
+# 429  397 
+  
+#heat map
+#all.equal(rownames(Bvals_sub), as.character(overlap_all)) #822 string mismatches
+
+library(heatmap.plus)
+library(SDMTools)
+#rowCol <- cbind(iontropCol, WTsigCol, A30PsigCol)
+colCol <- as.matrix(genotypeCol)
+colnames(colCol) <- "genotypeCol"
+rowCol <- cbind(WTsigCol, A30PsigCol, WTA30PsigCol)
+colnames(rowCol) <- c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+#changed the heatmap.plus() function so it plots correctly with one ColSideColors label - before, it attempted to take the number of rows of ColSideCols (line 142). When there is one vector, should use length() instead to return a value - replaced dim(csc)[1] with length().
+#changed dim(csc)[2] in line 145 to 1
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap.plus_oneColSide.R')
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(overlap_all, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value",limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes overlapping in all comparisons](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_3way_overlap_06222020.png)
+
+The difference between SNCA-OE and controls is more pronounced; A30P cells have intermediate levels of DNAm. About half of these sites have higher methylation in control cells, and half have higher methylation in SNCA-OE cells.
+
+##Overlaps between ctrl vs SNCA-OE and ctrl vs A30P only
+```{r heat map ctrlWT ctrlA30P, eval=F}
+#getting probe names
+overlap_WT_A30P <- WT_ctrl_hits$Name[WT_ctrl_hits$Name %in% A30P_ctrl_hits$Name]
+overlap_WT_A30P <- overlap_WT_A30P[-which(overlap_WT_A30P %in% A30P_WT_hits$Name)]
+
+#getting beta values
+Bvals_sub <- Bvals[rownames(Bvals) %in% overlap_WT_A30P,]
+
+#arrange/colour columns (samples) by genotype
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_ctrl_hits[WT_ctrl_hits$Name %in% overlap_WT_A30P,c("Name","DB")]
+WTsigCol <- WTsigCol[match(overlap_WT_A30P, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+#blue  red 
+#2163 1712 
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_ctrl_hits[A30P_ctrl_hits$Name %in% overlap_WT_A30P,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(overlap_WT_A30P, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+#blue  red 
+#2163 1712 
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- WT_A30P_gene_list[WT_A30P_gene_list$Name %in% overlap_WT_A30P,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(overlap_WT_A30P, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+#blue  red 
+#1820 2055
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(overlap_WT_A30P, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value", limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes overlapping in control vs SNCA-OE and control vs A30P](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_WT_A30P_06222020.png)
+
+These sites have the same pattern of DNAm in SNCA-OE and A30P cells. Slightly more than half of them have increased DNAm as compared to controls.
+
+##Overlaps between ctrl vs SNCA-OE and SNCA-OE vs A30P
+```{r heat map ctrlWT WT30P, eval=F}
+#getting probe names
+overlap_WT_A30PWT <- WT_ctrl_hits$Name[WT_ctrl_hits$Name %in% A30P_WT_hits$Name]
+overlap_WT_A30PWT <- overlap_WT_A30PWT[-which(overlap_WT_A30PWT %in% A30P_ctrl_hits$Name)]
+
+#getting beta values
+Bvals_sub <- Bvals[rownames(Bvals) %in% overlap_WT_A30PWT,]
+
+#arrange/colour columns (samples) by genotype
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_ctrl_hits[WT_ctrl_hits$Name %in% overlap_WT_A30PWT,c("Name","DB")]
+WTsigCol <- WTsigCol[match(overlap_WT_A30PWT, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+#blue  red 
+#1662 4800
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_gene_list[A30P_gene_list$Name %in% overlap_WT_A30PWT,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(overlap_WT_A30PWT, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+#blue  red 
+#2231 4231
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- WT_A30P_gene_list[WT_A30P_gene_list$Name %in% overlap_WT_A30PWT,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(overlap_WT_A30PWT, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+#blue  red 
+#4800 1662 
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(overlap_WT_A30PWT, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value", limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes overlapping in control vs SNCA-OE and SNCA-OE vs A30P](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_WT_WTA30P_06222020.png)
+
+These sites have the same pattern of DNAm in control and A30P cells (unique effect of SNCA-OE). Most of them have decreased DNAm in SNCA-OE cells as compared to controls.
+
+
+
+These sites have the same pattern of DNAm in SNCA-OE and A30P cells. Slightly more than half of them have increased DNAm as compared to controls.
+
+##Overlaps between ctrl vs A30P and SNCA-OE vs A30P
+```{r heat map ctrlA30P WTA30P, eval=F}
+#getting probe names
+overlap_A30P_A30PWT <- A30P_ctrl_hits$Name[A30P_ctrl_hits$Name %in% A30P_WT_hits$Name]
+overlap_A30P_A30PWT <- overlap_A30P_A30PWT[-which(overlap_A30P_A30PWT %in% WT_ctrl_hits$Name)]
+
+#getting beta values
+Bvals_sub <- Bvals[rownames(Bvals) %in% overlap_A30P_A30PWT,]
+
+#arrange/colour columns (samples) by genotype
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_gene_list[WT_gene_list$Name %in% overlap_A30P_A30PWT,c("Name","DB")]
+WTsigCol <- WTsigCol[match(overlap_A30P_A30PWT, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+#blue  red 
+#  120  112
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_gene_list[A30P_gene_list$Name %in% overlap_A30P_A30PWT,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(overlap_A30P_A30PWT, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+#blue  red 
+# 134   98 
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- WT_A30P_gene_list[WT_A30P_gene_list$Name %in% overlap_A30P_A30PWT,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(overlap_A30P_A30PWT, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+#blue  red 
+# 134   98 
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(overlap_A30P_A30PWT, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value", limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes overlapping in control vs A30P and SNCA-OE vs A30P](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_A30P_WTA30P_06222020.png)
+
+Only the A30P group is different. About half of probes have increased DNAm in A30P and half have decreased DNAm in A30P.
+
+#Heat maps for sites unique to each of the 3 comparisons
+The SNCA-OE vs ctrl/SNCA-OE vs A30P overlap (where only SNCA-OE is different) and A30P vs ctrl/SNCA-OE vs A30P overlap (where only A30P is different) raise questions about what the unique sites for each comparison vs control look like and whether they are different from these...
+
+##SNCA-OE unique sites
+```{r heat map WT, eval=F}
+#getting probe names
+WT_unique <- WT_ctrl_hits[-which(WT_ctrl_hits$Name %in% A30P_ctrl_hits$Name | WT_ctrl_hits$Name %in% A30P_WT_hits$Name),"Name"]
+
+#getting beta values
+Bvals_sub <- Bvals[rownames(Bvals) %in% WT_unique,]
+
+#arrange/colour columns (samples) by genotype
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_ctrl_hits[WT_ctrl_hits$Name %in% WT_unique,c("Name","DB")]
+WTsigCol <- WTsigCol[match(WT_unique, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+# blue   red 
+# 6586 11584 
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_gene_list[A30P_gene_list$Name %in% WT_unique,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(WT_unique, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+# blue   red 
+# 6586 11584 
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- WT_A30P_gene_list[WT_A30P_gene_list$Name %in% WT_unique,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(WT_unique, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+# blue   red 
+#11582  6588 
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(WT_unique, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value", limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes unique to control vs SNCA-OE](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_WT_unique_06222020.png)
+
+These sites have the same trend in DNAm as the category where all 3 comparisons overlap, with a larger difference between control and WT and intermediate DNAm levels for A30P. The magnitude of difference between control and WT was less pronounced in this group, which means that control vs WT passed thresholds while control vs A30P and WT vs A30P didn't.
+
+##A30P unique sites
+```{r heat map A30P, eval=F}
+#getting probe names
+A30P_unique <- A30P_ctrl_hits[-which(A30P_ctrl_hits$Name %in% WT_ctrl_hits$Name | A30P_ctrl_hits$Name %in% A30P_WT_hits$Name),"Name"]
+
+#getting beta values
+Bvals_sub <- Bvals[rownames(Bvals) %in% A30P_unique,]
+
+#arrange/colour columns (samples) by genotype
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_gene_list[WT_gene_list$Name %in% A30P_unique,c("Name","DB")]
+WTsigCol <- WTsigCol[match(A30P_unique, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+#blue  red 
+# 741  855 
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_gene_list[A30P_gene_list$Name %in% A30P_unique,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(A30P_unique, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+#blue  red 
+# 741  855 
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- WT_A30P_gene_list[WT_A30P_gene_list$Name %in% A30P_unique,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(A30P_unique, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+#blue  red 
+# 741  855 
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(A30P_unique, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value", limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes unique to control vs A30P](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_A30P_unique_06222020.png)
+
+##WT vs A30P unique sites
+```{r heat map WTA30P, eval=F}
+#getting probe names
+A30PWT_unique <- A30P_WT_hits[-which(A30P_WT_hits$Name %in% WT_ctrl_hits$Name | A30P_WT_hits$Name %in% A30P_ctrl_hits$Name),"Name"]
+
+#getting beta values
+Bvals_sub <- Bvals[rownames(Bvals) %in% A30PWT_unique,]
+
+#arrange/colour columns (samples) by genotype
+Bvals_sub <-Bvals_sub[,c(1,4,6,11,13,19,22,2,5,10,12,14,16,18,23,3,7:9,15,17,20,21)]
+
+#colour rows (probes) by direction of change in WT
+WTsigCol <- WT_gene_list[WT_gene_list$Name %in% A30PWT_unique,c("Name","DB")]
+WTsigCol <- WTsigCol[match(A30PWT_unique, WTsigCol$Name),"DB"]
+WTsigCol <- sapply(1:length(WTsigCol), function(x) ifelse(WTsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTsigCol))
+#blue  red 
+# 856 1304 
+
+#colour rows (probes) by direction of change in A30P
+A30PsigCol <- A30P_gene_list[A30P_gene_list$Name %in% A30PWT_unique,c("Name","DB")]
+A30PsigCol <- A30PsigCol[match(A30PWT_unique, A30PsigCol$Name),"DB"]
+A30PsigCol <- sapply(1:length(A30PsigCol), function(x) ifelse(A30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(A30PsigCol))
+#blue  red 
+#1305  855 
+
+#colour rows (probes) by direction of change in WT vs A30P
+WTA30PsigCol <- WT_A30P_gene_list[WT_A30P_gene_list$Name %in% A30PWT_unique,c("Name","DB")]
+WTA30PsigCol <- WTA30PsigCol[match(A30PWT_unique, WTA30PsigCol$Name),"DB"]
+WTA30PsigCol <- sapply(1:length(WTA30PsigCol), function(x) ifelse(WTA30PsigCol[x]>0, "blue", "red"))
+summary(as.factor(WTA30PsigCol))
+#blue  red 
+#1303  857 
+
+#arranging betas by direction of change
+Bvals_sub <- as.data.frame(Bvals_sub)
+Bvals_sub <- Bvals_sub[match(A30PWT_unique, rownames(Bvals_sub)),]
+Bvals_sub$WTsigCol <- WTsigCol
+Bvals_sub$A30PsigCol <- A30PsigCol
+Bvals_sub$WTA30PsigCol <- WTA30PsigCol
+Bvals_sub <- Bvals_sub %>% arrange(A30PsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTsigCol)
+Bvals_sub <- Bvals_sub %>% arrange(WTA30PsigCol)
+colnames(Bvals_sub)[24:26] <-  c("Ctrl vs SNCA-OE", "Ctrl vs A30P", "SNCA-OE vs A30P")
+
+heatmap.plus_oneColSide(as.matrix(Bvals_sub[,1:23]), ColSideColors = colCol, RowSideColors = as.matrix(Bvals_sub[,24:26]), ,labCol=genotypeLab, Colv = NA, Rowv=NA, col=Bu, margins=c(9,22), cexRow=0.5)
+legend.gradient(pnts=cbind(x =c(0.83,0.88,0.88,0.83), y =c(0.3,0.3,0.2,0.2)),cols=Bu, cex=0.7, title="Beta value", limits=c(round(min(Bvals_sub[,1:23]),2), round(max(Bvals_sub[,1:23]),2)))
+```
+![Heat map of probes unique to SNCA-OE vs A30P](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/heatmap_WTvA30P_unique_06222020.png)
+
+The control group has intermediate DNAm.

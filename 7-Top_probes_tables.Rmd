@@ -1,0 +1,136 @@
+##Traits associated with the top 20 differentially methylated genes for each group
+
+Author: Samantha Schaffner
+Date: November 2, 2020
+
+To supplement gene ontology enrichment and look for top genes of interest to plot, I took the top 20 DM/DHM probes from each comparison. Functions of the genes for these probes were annotated using GeneCards, GWAS Catalog, and EWAS Atlas databases, and this information was placed into supplementary tables.
+
+TUBA8 was one of the top genes with several DM probes in both SNCA-OE and A30P cells after looking at these results, which prompted a figure/pyrosequencing analysis on TUBA8 (see scripts #8 and #8a).
+
+#Libraries
+```{r libraries, eval=F}
+setwd("~/")
+library(dplyr)
+```
+
+#Read in data
+```{r read in data, eval=F}
+DMPs_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+DMPs_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+DHMPs_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+DHMPs_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+DMPs_WT_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_06182020.csv")
+DHMPs_WT_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_A30P_06192020.csv")
+```
+
+#Subset to unique/overlapping probes: mC
+```{r subset probes mC, eval=F}
+WT_hits <- DMPs_WT[DMPs_WT$threshold==TRUE,]
+A30P_hits <- DMPs_A30P[DMPs_A30P$threshold==TRUE,]
+WT_hits_unique <- WT_hits[-which(WT_hits$Name %in% A30P_hits$Name),]
+A30P_hits_unique <- A30P_hits[-which(A30P_hits$Name %in% WT_hits$Name),]
+shared_mC <- WT_hits[WT_hits$Name %in% A30P_hits$Name,]
+shared_A30P <- A30P_hits[A30P_hits$Name %in% WT_hits$Name,]
+all.equal(shared_mC$Name, shared_A30P$Name) #false
+
+shared_mC <- shared_mC %>% arrange(Name)
+shared_A30P <- shared_A30P %>% arrange(Name)
+all.equal(shared_mC$Name, shared_A30P$Name) #TRUE
+shared_mC$DB_A30P <- shared_A30P$DB
+shared_mC$adjP_A30P <- shared_A30P$adj.P.Val
+colnames(shared_mC)[43] <- "DB_WT"
+
+#average the delta beta for shared sites and rank by top 20
+shared_mC$avg_DB <- sapply(1:nrow(shared_mC), function(x){
+  mean(c(shared_mC$DB_A30P[x], shared_mC$DB_WT[x]))
+})
+shared_mC <- shared_mC %>% arrange(desc(abs(avg_DB)))
+shared_mC_top20 <- shared_mC[1:20,]
+
+#top 20, WT
+WT_hits_unique <- WT_hits_unique %>% arrange(desc(abs(DB)))
+WT_mC_top20 <- WT_hits_unique[1:20,]
+
+#top 20, A30P
+A30P_hits_unique <- A30P_hits_unique %>% arrange(desc(abs(DB)))
+A30P_mC_top20 <- A30P_hits_unique[1:20,]
+```
+
+#Subset to unique/overlapping probes: hmC
+```{r subset probes hmC, eval=F}
+WT_hits <- DHMPs_WT[DHMPs_WT$threshold==TRUE,]
+A30P_hits <- DHMPs_A30P[DHMPs_A30P$threshold==TRUE,]
+WT_hits_unique <- WT_hits[-which(WT_hits$Name %in% A30P_hits$Name),]
+A30P_hits_unique <- A30P_hits[-which(A30P_hits$Name %in% WT_hits$Name),]
+shared_hmC <- WT_hits[WT_hits$Name %in% A30P_hits$Name,]
+shared_A30P <- A30P_hits[A30P_hits$Name %in% WT_hits$Name,]
+all.equal(shared_hmC$Name, shared_A30P$Name) #false
+
+shared_hmC <- shared_hmC %>% arrange(Name)
+shared_A30P <- shared_A30P %>% arrange(Name)
+all.equal(shared_hmC$Name, shared_A30P$Name) #TRUE
+shared_hmC$DB_A30P <- shared_A30P$DB
+shared_hmC$adjP_A30P <- shared_A30P$adj.P.Val
+colnames(shared_hmC)[43] <- "DB_WT"
+
+#average the delta beta for shared sites and rank by top 20
+shared_hmC$avg_DB <- sapply(1:nrow(shared_hmC), function(x){
+  mean(c(shared_hmC$DB_A30P[x], shared_hmC$DB_WT[x]))
+})
+shared_hmC <- shared_hmC %>% arrange(desc(abs(avg_DB)))
+shared_hmC_top20 <- shared_hmC[1:20,]
+
+#top 20, WT
+WT_hits_unique <- WT_hits_unique %>% arrange(desc(abs(DB)))
+WT_hmC_top20 <- WT_hits_unique[1:20,]
+
+#top 20, A30P
+A30P_hits_unique <- A30P_hits_unique %>% arrange(desc(abs(DB)))
+A30P_hmC_top20 <- A30P_hits_unique[1:20,]
+
+#WT/A30P mC annotation in WT mC hits
+WT_A30P_mC_sub <- DMPs_WT_A30P[match(WT_mC_top20$Name, DMPs_WT_A30P$Name),]
+all.equal(WT_A30P_mC_sub$Name, WT_mC_top20$Name) #TRUE
+WT_mC_top20$DB_WT_A30P <- WT_A30P_mC_sub$DB
+WT_mC_top20$adjP_WT_A30P <- WT_A30P_mC_sub$adj.P.Val
+
+#WT/A30P mC annotation in A30P mC hits
+WT_A30P_mC_sub <- DMPs_WT_A30P[match(A30P_mC_top20$Name, DMPs_WT_A30P$Name),]
+all.equal(WT_A30P_mC_sub$Name, A30P_mC_top20$Name) #TRUE
+A30P_mC_top20$DB_WT_A30P <- WT_A30P_mC_sub$DB
+A30P_mC_top20$adjP_WT_A30P <- WT_A30P_mC_sub$adj.P.Val
+
+#WT/A30P mC annotation in shared mC hits
+WT_A30P_mC_sub <- DMPs_WT_A30P[match(shared_mC_top20$Name, DMPs_WT_A30P$Name),]
+all.equal(WT_A30P_mC_sub$Name, shared_mC_top20$Name) #TRUE
+shared_mC_top20$DB_WT_A30P <- WT_A30P_mC_sub$DB
+shared_mC_top20$adjP_WT_A30P <- WT_A30P_mC_sub$adj.P.Val
+
+#WT/A30P hmC annotation in WT hmC hits
+WT_A30P_hmC_sub <- DHMPs_WT_A30P[match(WT_hmC_top20$Name, DHMPs_WT_A30P$Name),]
+all.equal(WT_A30P_hmC_sub$Name, WT_hmC_top20$Name) #TRUE
+WT_hmC_top20$DB_WT_A30P <- WT_A30P_hmC_sub$DB
+WT_hmC_top20$adjP_WT_A30P <- WT_A30P_hmC_sub$adj.P.Val
+
+#WT/A30P hmC annotation in A30P hmC hits
+WT_A30P_hmC_sub <- DHMPs_WT_A30P[match(A30P_hmC_top20$Name, DHMPs_WT_A30P$Name),]
+all.equal(WT_A30P_hmC_sub$Name, A30P_hmC_top20$Name) #TRUE
+A30P_hmC_top20$DB_WT_A30P <- WT_A30P_hmC_sub$DB
+A30P_hmC_top20$adjP_WT_A30P <- WT_A30P_hmC_sub$adj.P.Val
+
+#WT/A30P hmC annotation in shared hmC hits
+WT_A30P_hmC_sub <- DHMPs_WT_A30P[match(shared_hmC_top20$Name, DHMPs_WT_A30P$Name),]
+all.equal(WT_A30P_hmC_sub$Name, shared_hmC_top20$Name) #TRUE
+shared_hmC_top20$DB_WT_A30P <- WT_A30P_hmC_sub$DB
+shared_hmC_top20$adjP_WT_A30P <- WT_A30P_hmC_sub$adj.P.Val
+```
+
+#Save
+```{r save, eval=F}
+write.csv(WT_mC_top20, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_top20.csv")
+write.csv(A30P_mC_top20, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_top20.csv")
+write.csv(shared_mC_top20, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_shared_top20.csv")
+write.csv(WT_hmC_top20, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_top20.csv")
+write.csv(A30P_hmC_top20, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_top20.csv")
+write.csv(shared_hmC_top20, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_shared_top20.csv")
+```

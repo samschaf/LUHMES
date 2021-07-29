@@ -1,0 +1,386 @@
+DecipherPD LUHMES EPIC Array Runs - Annotation of unique transcripts
+================================
+  
+##### Analyst: Samantha Schaffner
+##### Date: June 18, 2020
+  
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+In this script, I examined all of the sites analyzed for DNA methylation with the goal of collapsing the gene/genomic context annotation into one entry per site. I used the longest transcript of each gene to capture the most genomic information (see Edgar et al., Epigenetics & Chromatin 2014).
+
+#Libraries and objects
+```{r load libraries and objects, eval=F}
+setwd("~/")
+library(methylumi)
+library(lumi)
+library(biomaRt)
+library(dplyr)
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+```
+
+#Calculating number of transcripts per site
+```{r num transcripts, eval=F}
+#calculate the number of transcripts per site, "transcript_num"
+fdat <- fData(mC_methylumi_N)
+fdat_sub <- fdat[,c("NAME", "UCSC_REFGENE_GROUP", "UCSC_REFGENE_ACCESSION")]
+fdat_sub$UCSC_REFGENE_ACCESSION <- as.character(fdat_sub$UCSC_REFGENE_ACCESSION)
+fdat_sub$UCSC_REFGENE_GROUP <- as.character(fdat_sub$UCSC_REFGENE_GROUP)
+fdat_sub$transcript_num <- sapply(1:nrow(fdat_sub), function(x){
+  #if (length(fdat_sub$UCSC_REFGENE_ACCESSION[x])<1) { return(0) }
+  #else {
+  length(unlist(strsplit(fdat_sub$UCSC_REFGENE_ACCESSION[x], split=";"))) 
+})
+
+#subset to sites with multiple transcripts
+fdat_single <- fdat_sub[fdat_sub$transcript_num <= 1,]
+fdat_multi <- fdat_sub[fdat_sub$transcript_num >= 2,]
+all.equal(nrow(fdat_sub), sum(nrow(fdat_single), nrow(fdat_multi))) #TRUE
+```
+
+#Creating a master data frame for each transcript
+I will next create a data frame, "transcript_df", where each row corresponds to one transcript. This will make it easier to calculate transcript length and subset the dataframe to the entry with the longest transcript. 
+```{r transcript_df, eval=F}
+sum(fdat_multi$transcript_num) #1,007,327
+
+#loop over each CpG site and split each transcript into a distinct row
+#split into iterations of 10000 (so as not to crash R)
+transcript_df_1 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 1:10000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_1 <- rbind(transcript_df_1, transcript_df_temp)
+}
+transcript_df_1 <- transcript_df_1[-1,]
+
+transcript_df_2 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 10001:20000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_2 <- rbind(transcript_df_2, transcript_df_temp)
+}
+transcript_df_2 <- transcript_df_2[-1,]
+
+transcript_df_3 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 20001:30000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_3 <- rbind(transcript_df_3, transcript_df_temp)
+}
+transcript_df_3 <- transcript_df_3[-1,]
+
+transcript_df_4 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 30001:40000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_4 <- rbind(transcript_df_4, transcript_df_temp)
+}
+transcript_df_4 <- transcript_df_4[-1,]
+
+transcript_df_5 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 40001:50000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_5 <- rbind(transcript_df_5, transcript_df_temp)
+}
+transcript_df_5 <- transcript_df_5[-1,]
+
+#bind together entries so far, and remove individual dataframes (so as not to have too many objects in the environment)
+transcript_df <- rbind(transcript_df_1, transcript_df_2, transcript_df_3, transcript_df_4, transcript_df_5)
+rm(transcript_df_1, transcript_df_2, transcript_df_3, transcript_df_4, transcript_df_5)
+
+############################################################################################################
+
+transcript_df_6 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 50001:60000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_6 <- rbind(transcript_df_6, transcript_df_temp)
+}
+transcript_df_6 <- transcript_df_6[-1,]
+
+transcript_df_7 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 60001:70000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_7 <- rbind(transcript_df_7, transcript_df_temp)
+}
+transcript_df_7 <- transcript_df_7[-1,]
+
+transcript_df_8 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 70001:80000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_8 <- rbind(transcript_df_8, transcript_df_temp)
+}
+transcript_df_8 <- transcript_df_8[-1,]
+
+transcript_df_9 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 80001:90000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_9 <- rbind(transcript_df_9, transcript_df_temp)
+}
+transcript_df_9 <- transcript_df_9[-1,]
+
+transcript_df_10 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 90001:100000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_10 <- rbind(transcript_df_10, transcript_df_temp)
+}
+transcript_df_10 <- transcript_df_10[-1,]
+
+transcript_df <- rbind(transcript_df, transcript_df_6, transcript_df_7, transcript_df_8, transcript_df_9, transcript_df_10)
+rm(transcript_df_6, transcript_df_7, transcript_df_8, transcript_df_9, transcript_df_10)
+
+############################################################################################################
+
+transcript_df_11 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 100001:110000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_11 <- rbind(transcript_df_11, transcript_df_temp)
+}
+transcript_df_11 <- transcript_df_11[-1,]
+
+transcript_df_12 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 110001:120000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_12 <- rbind(transcript_df_12, transcript_df_temp)
+}
+transcript_df_12 <- transcript_df_12[-1,]
+
+transcript_df_13 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 120001:130000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_13 <- rbind(transcript_df_13, transcript_df_temp)
+}
+transcript_df_13 <- transcript_df_13[-1,]
+
+transcript_df_14 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 130001:140000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_14 <- rbind(transcript_df_14, transcript_df_temp)
+}
+transcript_df_14 <- transcript_df_14[-1,]
+
+transcript_df_15 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 140001:150000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_15 <- rbind(transcript_df_15, transcript_df_temp)
+}
+transcript_df_15 <- transcript_df_15[-1,]
+
+transcript_df <- rbind(transcript_df, transcript_df_11, transcript_df_12, transcript_df_13, transcript_df_14, transcript_df_15)
+rm(transcript_df_11, transcript_df_12, transcript_df_13, transcript_df_14, transcript_df_15)
+
+############################################################################################################
+
+transcript_df_16 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 150001:160000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_16 <- rbind(transcript_df_16, transcript_df_temp)
+}
+transcript_df_16 <- transcript_df_16[-1,]
+
+transcript_df_17 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 160001:170000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_17 <- rbind(transcript_df_17, transcript_df_temp)
+}
+transcript_df_17 <- transcript_df_17[-1,]
+
+transcript_df_18 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 170001:180000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_18 <- rbind(transcript_df_18, transcript_df_temp)
+}
+transcript_df_18 <- transcript_df_18[-1,]
+
+transcript_df_19 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 180001:190000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_19 <- rbind(transcript_df_19, transcript_df_temp)
+}
+transcript_df_19 <- transcript_df_19[-1,]
+
+transcript_df_20 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 190001:200000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_20 <- rbind(transcript_df_20, transcript_df_temp)
+}
+transcript_df_20 <- transcript_df_20[-1,]
+
+transcript_df <- rbind(transcript_df, transcript_df_16, transcript_df_17, transcript_df_18, transcript_df_19, transcript_df_20)
+rm(transcript_df_16, transcript_df_17, transcript_df_18, transcript_df_19, transcript_df_20)
+
+############################################################################################################
+
+transcript_df_21 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 200001:210000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_21 <- rbind(transcript_df_21, transcript_df_temp)
+}
+transcript_df_21 <- transcript_df_21[-1,]
+
+transcript_df_22 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 210001:220000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_22 <- rbind(transcript_df_22, transcript_df_temp)
+}
+transcript_df_22 <- transcript_df_22[-1,]
+
+transcript_df_23 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 220001:230000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_23 <- rbind(transcript_df_23, transcript_df_temp)
+}
+transcript_df_23 <- transcript_df_23[-1,]
+
+transcript_df_24 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 230001:240000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_24 <- rbind(transcript_df_24, transcript_df_temp)
+}
+transcript_df_24 <- transcript_df_24[-1,]
+
+transcript_df_25 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 240001:250000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_25 <- rbind(transcript_df_25, transcript_df_temp)
+}
+transcript_df_25 <- transcript_df_25[-1,]
+
+transcript_df <- rbind(transcript_df, transcript_df_21, transcript_df_22, transcript_df_23, transcript_df_24, transcript_df_25)
+rm(transcript_df_21, transcript_df_22, transcript_df_23, transcript_df_24, transcript_df_25)
+
+############################################################################################################
+
+transcript_df_26 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 250001:260000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_26 <- rbind(transcript_df_26, transcript_df_temp)
+}
+transcript_df_26 <- transcript_df_26[-1,]
+
+transcript_df_27 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 260001:270000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_27 <- rbind(transcript_df_27, transcript_df_temp)
+}
+transcript_df_27 <- transcript_df_27[-1,]
+
+transcript_df_28 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 270001:280000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_28 <- rbind(transcript_df_28, transcript_df_temp)
+}
+transcript_df_28 <- transcript_df_28[-1,]
+
+transcript_df_29 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 280001:290000){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_29 <- rbind(transcript_df_29, transcript_df_temp)
+}
+transcript_df_29 <- transcript_df_29[-1,]
+
+transcript_df_30 <- data.frame(site=NA, group=NA, acc=NA)
+for (i in 290001:nrow(fdat_multi)){
+  #print(i)
+  refgene_groups <- unlist(strsplit(fdat_multi$UCSC_REFGENE_GROUP[i], split=";"))
+  refgene_accs <- unlist(strsplit(fdat_multi$UCSC_REFGENE_ACCESSION[i], split=";"))
+  transcript_df_temp <- data.frame(site=rep(fdat_multi$NAME[i], length(refgene_groups)), group=refgene_groups, acc=refgene_accs)
+  transcript_df_30 <- rbind(transcript_df_30, transcript_df_temp)
+}
+transcript_df_30 <- transcript_df_30[-1,]
+
+transcript_df <- rbind(transcript_df, transcript_df_26, transcript_df_27, transcript_df_28, transcript_df_29, transcript_df_30)
+rm(transcript_df_26, transcript_df_27, transcript_df_28, transcript_df_29, transcript_df_30)
+transcript_df <- distinct(transcript_df)
+```
+
+#Add single transcript annotations and save
+```{r save, eval=F}
+#add the single transcript annotations
+fdat_single_sub <- fdat_single[,1:3]
+colnames(fdat_single_sub) <- c("site", "group", "acc")
+transcript_df <- rbind(transcript_df, fdat_single_sub)
+
+save(transcript_df, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/transcript_df_062020.RData")
+```

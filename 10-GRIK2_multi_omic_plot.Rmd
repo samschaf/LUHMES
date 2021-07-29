@@ -1,0 +1,390 @@
+##GRIK2 Multi-Omic Plot
+Author: Samantha Schaffner
+Date: April 15, 2021
+
+In this script, I will plot DNAm, DNAhm, and expression at the GRIK2 gene in one plot.
+
+#Read in data
+```{r read in data, eval=F}
+setwd("~/")
+library(methylumi)
+library(lumi)
+library(ggplot2)
+library(dplyr)
+library(DescTools)
+
+#load in methylumi objects for LUHMES DNAm and DNAhm
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_hmC_clean_SS_06182020.RData")
+
+#load in RNAseq results
+RNA_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_WT.csv", skip=1)
+RNA_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_A30P.csv", skip=1)
+```
+
+#Subsetting to GRIK2 and creating a new data frame
+```{r subset GRIK2, eval=F}
+fdat <- fData(mC_methylumi_N)
+length(GRIK2_probes <- fdat[grep("GRIK2",fdat$UCSC_REFGENE_NAME),"TargetID"]) #56
+
+GRIK2_mC <- betas(mC_methylumi_N)
+GRIK2_mC <- GRIK2_mC[rownames(GRIK2_mC) %in% GRIK2_probes,]
+
+#annotate chromosomal position for methylation data
+fdat_sub <- fdat[grep("GRIK2",fdat$UCSC_REFGENE_NAME),] 
+all.equal(rownames(fdat_sub), rownames(GRIK2_mC)) #TRUE
+GRIK2_mC <- as.data.frame(GRIK2_mC)
+GRIK2_mC$pos <- fdat_sub$MAPINFO
+colnames(GRIK2_mC)[1:23] <- c("ctrl1", "WT1", "A30P1", "ctrl2", "WT2", "ctrl3", "A30P2", "A30P3", "A30P4", "WT3", "ctrl4", "WT4", "ctrl5", "WT5", "A30P5", "WT6", "A30P6", "WT7", "ctrl6", "A30P7", "A30P8", "ctrl7", "WT8")
+
+GRIK2_hmC <- hmC_betas_matrix_N[rownames(hmC_betas_matrix_N) %in% GRIK2_probes,]
+fdat_sub_hmC <- fdat[fdat$TargetID %in% rownames(GRIK2_hmC),]
+identical(rownames(fdat_sub_hmC), rownames(GRIK2_hmC)) #TRUE
+GRIK2_hmC <- as.data.frame(GRIK2_hmC)
+GRIK2_hmC$pos <- fdat_sub_hmC$MAPINFO
+colnames(GRIK2_hmC)[1:23] <- c("ctrl1", "WT1", "A30P1", "ctrl2", "WT2", "ctrl3", "A30P2", "A30P3", "A30P4", "WT3", "ctrl4", "WT4", "ctrl5", "WT5", "A30P5", "WT6", "A30P6", "WT7", "ctrl6", "A30P7", "A30P8", "ctrl7", "WT8")
+
+nrow(mC_only_sites <- GRIK2_mC[-which(rownames(GRIK2_mC) %in% rownames(GRIK2_hmC)),]) #39
+hmC_NA <- data.frame(ctrl1=rep(NA, 39), WT1=rep(NA, 39), A30P1=rep(NA, 39), ctrl2=rep(NA, 39),
+                     WT2=rep(NA, 39), ctrl3=rep(NA, 39), A30P2=rep(NA, 39), A30P3=rep(NA, 39),
+                     A30P4=rep(NA, 39), WT3=rep(NA, 39), ctrl4=rep(NA, 39), WT4=rep(NA, 39),
+                     ctrl5=rep(NA, 39), WT5=rep(NA, 39), A30P5=rep(NA, 39), WT6=rep(NA, 39),
+                     A30P6=rep(NA, 39), WT7=rep(NA, 39), ctrl6=rep(NA, 39), A30P7=rep(NA, 39),
+                     A30P8=rep(NA, 39), ctrl7=rep(NA, 39), WT8=rep(NA, 39), pos=mC_only_sites$pos)
+rownames(hmC_NA) <- rownames(mC_only_sites)
+GRIK2_hmC <- rbind(GRIK2_hmC, hmC_NA)
+all(rownames(GRIK2_hmC) %in% rownames(GRIK2_mC)) #TRUE
+GRIK2_hmC$cpg <- rownames(GRIK2_hmC)
+GRIK2_hmC <- GRIK2_hmC %>% arrange(cpg)
+GRIK2_mC$cpg <- rownames(GRIK2_mC)
+GRIK2_mC <- GRIK2_mC %>% arrange(cpg)
+all.equal(GRIK2_hmC$cpg, GRIK2_mC$cpg) #TRUE
+
+GRIK2_mC_melt <- melt(GRIK2_mC, id.vars="pos")
+GRIK2_mC_melt$value <- as.numeric(GRIK2_mC_melt$value)
+GRIK2_mC_melt$Genotype <- rep(NA, nrow(GRIK2_mC_melt))
+GRIK2_mC_melt[grep("ctrl",GRIK2_mC_melt$variable),"Genotype"] <- "Control"
+GRIK2_mC_melt[grep("WT",GRIK2_mC_melt$variable),"Genotype"] <- "SNCA-OE"
+GRIK2_mC_melt[grep("A30P",GRIK2_mC_melt$variable),"Genotype"] <- "A30P"
+
+#remove sites with NA values
+GRIK2_mC_melt <- GRIK2_mC_melt[which(GRIK2_mC_melt$Genotype %in% c("Control", "SNCA-OE", "A30P")),]
+
+
+#calculate group means for drawing lines
+ctrl_group_means <- GRIK2_mC_melt[GRIK2_mC_melt$Genotype=="Control",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+ctrl_group_means$Genotype <- "Control"
+
+A30P_group_means <- GRIK2_mC_melt[GRIK2_mC_melt$Genotype=="A30P",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+A30P_group_means$Genotype <- "A30P"
+
+WT_group_means <- GRIK2_mC_melt[GRIK2_mC_melt$Genotype=="SNCA-OE",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+WT_group_means$Genotype <- "SNCA-OE"
+
+all.equal(ctrl_group_means$pos, WT_group_means$pos, A30P_group_means$pos)
+group_means <- rbind(ctrl_group_means, WT_group_means, A30P_group_means)
+colnames(group_means)[2] <- "value"
+
+#sub_positions <- c(sub_positions, GRIK2_sub$pos, GRIK2_sub2$pos)
+#GRIK2_mC_melt[GRIK2_mC_melt$pos %in% sub_positions, "Genotype"] <- "sig"
+GRIK2_mC_melt$Genotype <- reorder.factor(GRIK2_mC_melt$Genotype, new.order=c("Control", "SNCA-OE", "A30P"))
+
+ggplot(GRIK2_mC_melt, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=GRIK2_mC_melt) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw() + geom_line(data=group_means, aes(group=group_means$Genotype, colour=as.factor(group_means$Genotype))) + scale_x_continuous("Chromosome 6 Coordinate") + scale_colour_manual(values=c("black", "gray75", "gray48"))
+```
+![DNAm across GRIK2 gene](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_mC_whole_gene_BW.png)
+
+#Plotting TSS200 region
+```{r TSS200, eval=F}
+WT_DMPs <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+nrow(GRIK2_DMPs_WT <- WT_DMPs[WT_DMPs$threshold==TRUE & WT_DMPs$Name %in% GRIK2_mC$cpg,]) #16 sites
+A30P_DMPs <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+nrow(GRIK2_DMPs_A30P <- A30P_DMPs[A30P_DMPs$threshold==TRUE & A30P_DMPs$Name %in% GRIK2_mC$cpg,]) #5 sites
+pos_all <- c(GRIK2_DMPs_WT$pos, GRIK2_DMPs_A30P$pos)
+summary(pos_all) #101846767-102375569
+length(unique(pos_all)) #16 unique sites
+unique_pos <- unique(pos_all)
+sort(unique_pos)
+# [1] 101846767 101846779 101846791 101846797
+# [5] 101846805 101880078 102054165 102062733
+# [9] 102068742 102088363 102124560 102166512
+#[13] 102254236 102266089 102326919 102375569
+
+#zoomed in plot for the first 5 DM sites
+GRIK2_sub <- GRIK2_mC_melt[GRIK2_mC_melt$pos<=101846805 & GRIK2_mC_melt$pos>=101846767,]
+group_means_sub <- group_means[group_means$pos<=101846805& group_means$pos>=101846767,]
+ggplot(GRIK2_sub, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=GRIK2_sub) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw() + geom_line(data=group_means_sub, aes(group=group_means_sub$Genotype, colour=as.factor(group_means_sub$Genotype))) + scale_x_continuous("Chromosome 6 Coordinate") + scale_colour_manual(values=c("black", "gray75", "gray48"))
+```
+![DNAm at GRIK2 TSS200](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_mC_1_BW.png)
+
+#Plotting only significantly DM sites
+chr6:101846767-102375569 
+```{r sig sites, eval=F}
+GRIK2_mC_melt_sub <- GRIK2_mC_melt[GRIK2_mC_melt$pos %in% unique_pos,]
+group_means_sub <- group_means[group_means$pos %in% unique_pos,]
+
+GRIK2_mC_melt_sub$Genotype <- as.character(GRIK2_mC_melt_sub$Genotype)
+GRIK2_mC_melt_sub$Genotype <- reorder.factor(GRIK2_mC_melt_sub$Genotype, new.order=c("Control", "SNCA-OE", "A30P"))
+
+ggplot(GRIK2_mC_melt_sub, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=GRIK2_mC_melt_sub) + geom_line(data=group_means_sub, aes(group=group_means_sub$Genotype, colour=as.factor(group_means_sub$Genotype))) + scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw()  + scale_x_continuous("Chromosome 6 Coordinate") + scale_colour_manual(values=c("black", "gray75", "gray48"))
+```
+![DNAm across GRIK2 gene at significantly DM sites](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_mC_uniquepos_BW.png)
+
+## Nicole Annotation Figure
+ Load Libraries and Data
+```{r}
+library(plyr)
+library(Gviz)
+library(rtracklayer)
+library(coMET)
+```
+
+###mC
+```{r}
+range <- fdat[rownames(fdat) %in% fdat[fdat$MAPINFO %in% unique_pos,"TargetID"], ]
+GRIK2_chr <- unique(range$CHR)
+GRIK2_max <- max(range$MAPINFO)
+GRIK2_min <- min(range$MAPINFO)
+subbed_fdat <- fdat[fdat$CHR == 6 & fdat$TargetID %in% rownames(range), ]
+betas <- t(betas(mC_methylumi_N)[(featureNames(mC_methylumi_N) %in% rownames(subbed_fdat)),])
+pdat <- pData(mC_methylumi_N)
+pdat$Sample_Label <- gsub(" ", "", pdat$Sample_Label)
+pdat$Sample_Label <- gsub("_", ".", pdat$Sample_Label)
+rownames(pdat) <- pdat$Sample_Label
+
+identical(rownames(betas), rownames(pdat)) #TRUE
+betas <- as.data.frame(cbind(pdat[,"Genotype"], betas))
+colnames(betas)[1] <- "Genotype"
+
+betas.GFP <- betas[betas$Genotype == "GFP",]
+betas.GFP <- betas.GFP[complete.cases(betas.GFP),]
+betas.GFP$Sample <- paste("Control", 1:nrow(betas.GFP), sep = ".")
+rownames(betas.GFP) <- betas.GFP$Sample 
+betas.GFP$Sample <- NULL
+betas.GFP$Genotype <- NULL
+betas.GFP <- as.data.frame(t(betas.GFP))
+betas.GFP$symbol <- rownames(betas.GFP)
+
+betas.WT <- betas[betas$Genotype == "WT",]
+betas.WT <- betas.WT[complete.cases(betas.WT),]
+betas.WT$Sample <- paste("WT aSyn", 1:nrow(betas.WT), sep = ".")
+rownames(betas.WT) <- betas.WT$Sample 
+betas.WT$Sample <- NULL
+betas.WT$Genotype <- NULL
+betas.WT <- as.data.frame(t(betas.WT))
+betas.WT$symbol <- rownames(betas.WT)
+
+betas.A30P <- betas[betas$Genotype == "A30P",]
+betas.A30P <- betas.A30P[complete.cases(betas.A30P),]
+betas.A30P$Sample <- paste("A30P aSyn", 1:nrow(betas.A30P), sep = ".")
+rownames(betas.A30P) <- betas.A30P$Sample 
+betas.A30P$Sample <- NULL
+betas.A30P$Genotype <- NULL
+betas.A30P <- as.data.frame(t(betas.A30P))
+betas.A30P$symbol <- rownames(betas.A30P)
+
+Genotype_betas <- join(betas.GFP, betas.WT)
+Genotype_betas <- join(Genotype_betas, betas.A30P)
+rownames(Genotype_betas) <- Genotype_betas$symbol
+GRIK2_fdat <- fdat[rownames(fdat) %in% rownames(subbed_fdat), c("CHR", "MAPINFO")]
+GRIK2_fdat$genome <- "hg19"
+GRIK2_fdat$symbol <- rownames(GRIK2_fdat)
+Genotype_betas <- join(Genotype_betas, GRIK2_fdat)
+rownames(Genotype_betas) <- Genotype_betas$symbol
+colnames(Genotype_betas)
+Genotype_betas <- Genotype_betas[, c(8, 25:27, 1:7,9:24)]
+colnames(Genotype_betas)
+```
+
+###hmC
+```{r}
+betas <- t(hmC_betas_matrix_N[rownames(hmC_betas_matrix_N) %in% fdat[fdat$MAPINFO %in% unique_pos,"TargetID"],])
+betas <- as.data.frame(cbind(pdat[,"Genotype"], betas))
+colnames(betas)[1] <- "Genotype"
+
+betas.GFP <- betas[betas$Genotype == "GFP",]
+betas.GFP <- betas.GFP[complete.cases(betas.GFP),]
+betas.GFP$Sample <- paste("Control", 1:nrow(betas.GFP), sep = ".")
+rownames(betas.GFP) <- betas.GFP$Sample 
+betas.GFP$Sample <- NULL
+betas.GFP$Genotype <- NULL
+betas.GFP <- as.data.frame(t(betas.GFP))
+betas.GFP$symbol <- rownames(betas.GFP)
+
+betas.WT <- betas[betas$Genotype == "WT",]
+betas.WT <- betas.WT[complete.cases(betas.WT),]
+betas.WT$Sample <- paste("WT aSyn", 1:nrow(betas.WT), sep = ".")
+rownames(betas.WT) <- betas.WT$Sample 
+betas.WT$Sample <- NULL
+betas.WT$Genotype <- NULL
+betas.WT <- as.data.frame(t(betas.WT))
+betas.WT$symbol <- rownames(betas.WT)
+
+betas.A30P <- betas[betas$Genotype == "A30P",]
+betas.A30P <- betas.A30P[complete.cases(betas.A30P),]
+betas.A30P$Sample <- paste("A30P aSyn", 1:nrow(betas.A30P), sep = ".")
+rownames(betas.A30P) <- betas.A30P$Sample 
+betas.A30P$Sample <- NULL
+betas.A30P$Genotype <- NULL
+betas.A30P <- as.data.frame(t(betas.A30P))
+betas.A30P$symbol <- rownames(betas.A30P)
+
+Genotype_betas_hmC <- join(betas.GFP, betas.WT)
+Genotype_betas_hmC <- join(Genotype_betas_hmC, betas.A30P)
+rownames(Genotype_betas_hmC) <- Genotype_betas_hmC$symbol
+GRIK2_fdat <- fdat[rownames(fdat) %in% rownames(subbed_fdat), c("CHR", "MAPINFO")]
+GRIK2_fdat$genome <- "hg19"
+GRIK2_fdat$symbol <- rownames(GRIK2_fdat)
+Genotype_betas_hmC <- join(Genotype_betas_hmC, GRIK2_fdat)
+rownames(Genotype_betas_hmC) <- Genotype_betas_hmC$symbol
+colnames(Genotype_betas_hmC)
+Genotype_betas_hmC <- Genotype_betas_hmC[, c(8, 25:27, 1:7,9:24)]
+colnames(Genotype_betas_hmC)
+```
+
+Producing tracks and making figure
+```{r}
+# Chromosome Track
+GRIK2_itrack <- IdeogramTrack(genome = unique(Genotype_betas$genome), chromosome = paste("chr", unique(Genotype_betas$CHR), sep = ""))
+
+# Basepair map track
+GRIK2_gtrack <- GenomeAxisTrack(add53 = TRUE, add35 = TRUE, labelPos = "below")
+
+Genotype_betas[,5:27]<- apply(Genotype_betas[,5:27], 2, function(x) as.numeric(as.character(x)))
+GRIK2_dTrack <- DataTrack(data = Genotype_betas[,5:27], name = "DNAm Beta Value", start = Genotype_betas$MAPINFO, width = 1, chromosome = paste("chr", unique(Genotype_betas$CHR), sep=""), genome = unique(Genotype_betas$genome), groups = rep(c("WT aSyn", "A30P aSyn", "Control"), c(8,8,7)), type = c("a", "p"), col=c("gray75", "#e1620e", "black"), jitter.x=T, factor = 1, cex = 1, alpha =1, cex.legend = 1, ylim=c(0,1))
+
+Genotype_betas_hmC[,5:27]<- apply(Genotype_betas_hmC[,5:27], 2, function(x) as.numeric(as.character(x)))
+GRIK2_dTrack_hmC <- DataTrack(data = Genotype_betas_hmC[,5:27], name = "DNAhm Beta Value", start = Genotype_betas_hmC$MAPINFO, width = 1, chromosome = paste("chr", unique(Genotype_betas_hmC$CHR), sep=""), genome = unique(Genotype_betas_hmC$genome), groups = rep(c("WT aSyn", "A30P aSyn", "Control"), c(8,8,7)), type = c("a", "p"), col=c("gray75", "#e1620e", "black"), jitter.x=T, factor = 2.5, cex = 1, alpha =1, cex.legend = 1)
+
+#intron/exon track
+knownGenes <- UcscTrack(genome = "hg19", chromosome = "chr6", 
+                        track = "knownGene", from = min(Genotype_betas$MAPINFO), to = max(Genotype_betas$MAPINFO),
+                        trackType = "GeneRegionTrack", 
+                        rstarts = "exonStarts", rends = "exonEnds", 
+                        gene = "name", symbol = "name", 
+                        transcript = "name", strand = "strand", 
+                        fill = "grey", name = "UCSC Genes")
+
+#H3K4me1 track
+enhancer <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/ChIPseq/H3K4me1/Peaks_H3K4me1_Consensus.csv")
+enh_GRIK2 <- enhancer[enhancer$seqnames=="chr6" & enhancer$start>=(min(Genotype_betas$MAPINFO)-6000) & enhancer$end<=(max(Genotype_betas$MAPINFO)+6000),]
+enh_GRIK2_GFP <- enh_GRIK2[enh_GRIK2$GFP>0,1:6]
+enh_GRIK2_WT <- enh_GRIK2[enh_GRIK2$WT>0,c(1:5,7)]
+enh_GRIK2_A30P <- enh_GRIK2[enh_GRIK2$A30P>0,c(1:5,8)]
+H3K4me1_GFP <- AnnotationTrack(enh_GRIK2_GFP, name="H3K4me1 Control", chromosome="chr6", genome="hg19")
+H3K4me1_WT <- AnnotationTrack(enh_GRIK2_WT, name="H3K4me1 WT", chromosome="chr6", genome="hg19")
+H3K4me1_A30P <- AnnotationTrack(enh_GRIK2_A30P, name="H3K4me1 A30P", chromosome="chr6", genome="hg19", fill="blue")
+  
+
+#plotting
+plotTracks(list(GRIK2_itrack, GRIK2_gtrack, knownGenes, H3K4me1_GFP, H3K4me1_WT, H3K4me1_A30P, GRIK2_dTrack, GRIK2_dTrack_hmC), from = min(Genotype_betas$MAPINFO)-6000, to = max(Genotype_betas$MAPINFO)+6000, sizes = c(0.05,0.1,0.1,0.025,0.025,0.025,0.25, 0.25))
+
+#zoomed into DMR
+plotTracks(list(GRIK2_itrack, GRIK2_gtrack, GRIK2_UCSC, GRIK2_dTrack, GRIK2_dTrack_hmC), from = 101846767, to = 101846805, sizes = c(0.05,0.1,0.1,0.25, 0.25))
+```
+![GRIK2 DNAm and DNAhm by coordinate, with gene/chromosome structure](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_track_H3K4me1.png)
+
+![GRIK2 TSS200](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_track_TSS200.png)
+
+
+#Find out the context annotations according to "longest transcript"...
+```{r context anno, eval=F}
+longest_transcript <- read.delim("~/KoborLab/kobor_space/shared_coding_resource/Gene_CpG_Relations_EPIC.txt", sep="\t")
+GRIK2_longest <- longest_transcript[longest_transcript$Probe_ID %in% GRIK2_mC$cpg,]
+all.equal(as.character(GRIK2_longest$Probe_ID), GRIK2_mC$cpg) #TRUE
+GRIK2_mC$longest_transcript_anno <- GRIK2_longest$region
+
+GRIK2_mC_sub <- GRIK2_mC[GRIK2_mC$pos %in% unique_pos,]
+View(GRIK2_mC_sub[,c("pos", "longest_transcript_anno")])
+```
+
+###Plotting RNA
+```{r RNA, eval=F}
+GRIK2_RNA_WT <- RNA_WT[RNA_WT$gene_name=="GRIK2",]
+GRIK2_RNA_WT$FC <- 2^(GRIK2_RNA_WT$log2FoldChange)
+GRIK2_RNA_WT$SE <- 2^(GRIK2_RNA_WT$lfcSE)
+max(GRIK2_RNA_WT$FC + GRIK2_RNA_WT$SE) #2.77713
+
+GRIK2_RNA_A30P <- RNA_A30P[RNA_A30P$gene_name=="GRIK2",]
+GRIK2_RNA_A30P$FC <- 2^(GRIK2_RNA_A30P$log2FoldChange)
+GRIK2_RNA_A30P$SE <- 2^(GRIK2_RNA_A30P$lfcSE)
+max(GRIK2_RNA_A30P$FC + GRIK2_RNA_A30P$SE) #2.933495
+
+GRIK2_RNA_WT$Genotype <- "WT aSyn"
+GRIK2_RNA_A30P$Genotype <- "A30P aSyn"
+GRIK2_RNA <- rbind(GRIK2_RNA_WT[,c("FC","SE", "Genotype")], GRIK2_RNA_A30P[,c("FC","SE", "Genotype")])
+ctrl <- c(1,0,"Control")
+names(ctrl) <- c("FC","SE", "Genotype")
+GRIK2_RNA <- rbind(GRIK2_RNA, ctrl)
+GRIK2_RNA$Genotype <- reorder.factor(GRIK2_RNA$Genotype, new.order=c("Control","WT aSyn","A30P aSyn"))
+GRIK2_RNA$FC <- as.numeric(GRIK2_RNA$FC)
+GRIK2_RNA$SE <- as.numeric(GRIK2_RNA$SE)
+
+ggplot(GRIK2_RNA, aes(x=Genotype, y=FC, fill=Genotype)) + geom_bar(stat="identity") + theme_bw() + scale_fill_manual(values=c("black", "gray75", "gray48")) + scale_y_continuous(limits=c(0,3)) + geom_errorbar(aes(x=Genotype, ymin=FC-SE, ymax=FC+SE))
+
+##log2FC
+GRIK2_RNA <- rbind(GRIK2_RNA_WT[,c("log2FoldChange","lfcSE", "Genotype")], GRIK2_RNA_A30P[,c("log2FoldChange","lfcSE", "Genotype")])
+#ctrl <- c(1,0,"Control")
+#names(ctrl) <- c("log2FoldChange","lfcSE", "Genotype")
+#GRIK2_RNA <- rbind(GRIK2_RNA, ctrl)
+GRIK2_RNA$Genotype <- reorder.factor(GRIK2_RNA$Genotype, new.order=c("WT aSyn","A30P aSyn"))
+GRIK2_RNA$log2FoldChange <- as.numeric(GRIK2_RNA$log2FoldChange)
+GRIK2_RNA$lfcSE <- as.numeric(GRIK2_RNA$lfcSE)
+
+ggplot(GRIK2_RNA, aes(x=Genotype, y=log2FoldChange, fill=Genotype)) + geom_errorbar(aes(x=Genotype, ymin=log2FoldChange-lfcSE, ymax=log2FoldChange+lfcSE), width=0.5) + geom_bar(stat="identity", show.legend = FALSE) + theme_bw() + scale_fill_manual(values=c("gray75", "#e1620e")) + ylab("log2 Fold Change over Control") + ggtitle("GRIK2 mRNA Expression") + scale_y_continuous(breaks=c(0.2,0.4,0.6,0.8,1), limits=c(0,1.1))
+```
+![GRIK2 mRNA fold change levels](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_RNA_log2FC.png)
+
+#Melt hmC sites
+```{r hmC, eval=F}
+GRIK2_hmC_melt <- melt(GRIK2_hmC, id.vars="pos")
+GRIK2_hmC_melt$value <- as.numeric(GRIK2_hmC_melt$value)
+GRIK2_hmC_melt$Genotype <- rep(NA, nrow(GRIK2_hmC_melt))
+GRIK2_hmC_melt[grep("ctrl",GRIK2_hmC_melt$variable),"Genotype"] <- "Control"
+GRIK2_hmC_melt[grep("WT",GRIK2_hmC_melt$variable),"Genotype"] <- "SNCA-OE"
+GRIK2_hmC_melt[grep("A30P",GRIK2_hmC_melt$variable),"Genotype"] <- "A30P"
+
+#remove sites with NA values
+GRIK2_hmC_melt <- GRIK2_hmC_melt[which(GRIK2_hmC_melt$Genotype %in% c("Control", "SNCA-OE", "A30P")),]
+GRIK2_hmC_melt$Genotype <- reorder.factor(GRIK2_hmC_melt$Genotype, new.order=c("Control", "SNCA-OE", "A30P"))
+GRIK2_hmC_melt <- GRIK2_hmC_melt[complete.cases(GRIK2_hmC_melt),]
+
+#calculate group means for drawing lines
+ctrl_group_means <- GRIK2_hmC_melt[GRIK2_hmC_melt$Genotype=="Control",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+ctrl_group_means$Genotype <- "Control"
+
+A30P_group_means <- GRIK2_hmC_melt[GRIK2_hmC_melt$Genotype=="A30P",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+A30P_group_means$Genotype <- "A30P"
+
+WT_group_means <- GRIK2_hmC_melt[GRIK2_hmC_melt$Genotype=="SNCA-OE",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+WT_group_means$Genotype <- "SNCA-OE"
+
+all.equal(ctrl_group_means$pos, WT_group_means$pos, A30P_group_means$pos)
+group_means <- rbind(ctrl_group_means, WT_group_means, A30P_group_means)
+colnames(group_means)[2] <- "value"
+
+ggplot(GRIK2_hmC_melt, aes(pos, value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=GRIK2_hmC_melt) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw() + geom_line(data=group_means, aes(group=group_means$Genotype, colour=as.factor(group_means$Genotype))) + scale_x_continuous("Chromosome 6 Coordinate", limits=c(101846767,102375569)) + scale_colour_manual(values=c("black", "gray75", "gray48")) 
+```
+![DNAhm across the GRIK2 gene](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/GRIK2_hmC_wholegene_BW.png)
