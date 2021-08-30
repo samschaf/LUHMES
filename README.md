@@ -24,25 +24,25 @@ Files:
 
 "4b-LUHMES_overlap_permute_3way_hmC_06192020.Rmd" contains permutation testing for overlap in differentially hydroxymethylated probes between comparisons (Figure 3).
 
-"5-LUHMES_overlap_permute_mC_hmC.Rmd" contains permutation testing for overlap in differentially methylated and hydroxymethylated probes (Supplementary Figure 7).
+"5-LUHMES_overlap_permute_mC_hmC.Rmd" contains permutation testing for overlap in differentially methylated and hydroxymethylated probes (Supplementary Figure 3).
 
-"6-ermineR_uniqueDMgenes_longest_transcript_082020.Rmd" contains gene ontology enrichment analysis, using background from script 2c (Figure 4, Supplementary Figure 10).
+"6-ermineR_uniqueDMgenes_longest_transcript_082020.Rmd" contains gene ontology enrichment analysis, using background from script 2c (Figure 4, Supplementary Figure 4).
 
-"7-Top_probes_tables.Rmd" was used to create tables of the top 20 differentially methylated and hydroxymethylated probes (Tables 1-2, Supplementary Tables 6-8 and 12-14).
+"7-Top_probes_tables.Rmd" was used to create tables of the top 20 differentially methylated and hydroxymethylated probes (Tables 1-2).
 
 "8-TUBA8_multi_omic_plot.Rmd" was used to generate Supplementary Figure 2.
 
 "9-Plotting_loco_hits.Rmd" was used to plot CpGs mapping to locomotory behaviour-related genes (Figure 4).
 
-"9a-Plotting_glutamate_hits.Rmd" was used to plot CpGs mapping to glutamate receptor signaling genes (Supplementary Figure 6).
+"9a-Plotting_glutamate_hits.Rmd" was used to plot CpGs mapping to glutamate receptor signaling genes (Supplementary Figure 4).
 
 "10-GRIK2_multi_omic_plot.Rmd" was used to generate Figure 6.
 
-"11-SMITE_WT_092020.Rmd" contains SMITE multi-omic integration for WT aSyn vs control cells (Figures 5-6, Supplementary Figure 8, Supplementary Table 17).
+"11-SMITE_WT_092020.Rmd" contains SMITE multi-omic integration for WT aSyn vs control cells (Figures 5-6, Supplementary Figure 5).
 
-"11a-SMITE_A30P_092020.Rmd" contains SMITE multi-omic integration for A30P aSyn vs control cells (Figures 5-6, Supplementary Figure 9, Supplementary Table 18).
+"11a-SMITE_A30P_092020.Rmd" contains SMITE multi-omic integration for A30P aSyn vs control cells (Figures 5-6, Supplementary Figure 6).
 
-"12-omics_overlap.Rmd" was used to identify overlapping hits from independent differential DNAm, DNAhm, and expression analysis (Supplementary Tables 15-16) and to generate Figure 1.
+"12-omics_overlap.Rmd" was used to identify overlapping hits from independent differential DNAm, DNAhm, and expression analysis (Supplementary Table 7) and to generate Figure 1.
 
 
 
