@@ -1,0 +1,666 @@
+DecipherPD LUHMES EPIC Array Runs - Normalization
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: June 18, 2020
+
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+This script was adapted from an Rmd file provided by Nicole Gladish, Kobor Lab (January 2017). 
+
+UPDATE JAN 24 2020: Changed PCA plot code for Nicole's updated one (includes multiple test correction and heatmaps with continuous variables).
+
+UPDATE AUG 30 2021: Fixed an error in raw vs dasen-normalized plotting section where plots were split by probe type. Initially, the wrong object was used for annotating type I and II probes (from an earlier step before all filtering was complete) in the oxBS and BS data. This only affected the two plots generated at this stage, not any of the downstream analyses.
+
+# Pre-Processing and Normalization
+
+Colour correction and background subtraction using specific control probes contained in the chip technology were completed using GenomeStudio, software developed by Illumina.
+
+```{r libraries, results='hide', message=FALSE, warning=FALSE, eval=F}
+setwd("~/")
+library(methylumi)
+library(gplots)
+library(marray)
+library(lumi)
+library(lattice)
+library(wateRmelon)
+library("RColorBrewer")
+library(plyr)
+library(VennDiagram)
+library(ggplot2)
+library(qvalue)
+library("sva")
+library(parallel)
+library(gridExtra)
+library(grid)
+library("reshape2")
+library(quantro)
+library(doParallel)
+library(RPMM)
+```
+
+## Create methylumi objects
+```{r methyl objs, eval=F}
+allFile <- ("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_201806_alldata.txt")
+qcFile <-  ("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_201806_qcfile.txt")
+
+#create MethylumiSet object
+hmc.2 <- methylumiR(allFile, qcfile = qcFile)
+sampleFile <- ("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_201806_samplesheet.txt") 
+sampleInfo <- read.delim(sampleFile, row.names=1, stringsAsFactors=F)
+sampleNames(hmc.2) <- sampleInfo$Sample_Label
+sampleInfo <- sampleInfo[sampleNames(hmc.2),] 
+identical(sampleNames(hmc.2), sampleInfo$Sample_Label) # TRUE
+stopifnot(all(sampleNames(hmc.2)%in%rownames(sampleInfo)))
+pData(hmc.2) <- sampleInfo
+save(hmc.2, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hmc_methlylumi_06192020.RData")
+dim(hmc.2)
+#Features  Samples 
+#  865918       48 
+```
+
+There are **865,918** probes with **48** samples.
+
+## Meta data check samples match
+```{r meta data check, eval=F }
+meta_hmc<-pData(hmc.2)
+head(meta_hmc)
+
+identical(sampleNames(hmc.2), as.character(meta_hmc$Sample_Label)) #TRUE
+```
+
+# Probe Filtering
+##### Removal of SNP Probes
+We remove the SNP probes as they are used as an internal control to ensure your samples are what you think they are and are not used for any methylation analysis.
+
+```{r SNP filter, eval=F}
+LUHMES.2_filtered <- hmc.2[substring(featureNames(hmc.2),1,2) != "rs", ]
+dim(LUHMES.2_filtered) # probes = 865859, n = 48
+```
+
+##### Cross-hybridizing probes
+https://genomebiology.biomedcentral.com/articles/10.1186/s13059-016-1066-1
+"43,254 cross-reactive probes with ≥ 47 bp homology with an off-target site, of which 15,782 (36.5 %) are new to the EPIC platform"
+
+They include this annotated list in their supplement.
+
+```{r cross hybrid filter, eval=F}
+EPIC_Cross_Hybrid <- read.csv("~/KoborLab/kobor_space/shared_coding_resource/Illumina_EPIC/EPIC_Cross_reactive_probes.csv" , row.names = 1) 
+LUHMES.2_filtered<-LUHMES.2_filtered[which(!(featureNames(LUHMES.2_filtered)%in%rownames(EPIC_Cross_Hybrid))),]
+dim(LUHMES.2_filtered) # probes = 822682, n = 48
+```
+
+
+##### Polymorphic probes
+
+I will keep polymorphic probes in since this is a cell line, and all samples should be genetically identical.
+
+We have removed 43,236 probes. This leaves us with 822,682 probes for our analysis. Including 17,745 X chr and 379 Y chr CpGs.
+
+# Watermelon Filter and Normalization
+Using pfilter from wateRmelon to filter probes based on their detection p-value.
+```{r wateRmelon filter, eval=F}
+#perc remove samples having this percentage of sites with a detection p-value greater than pnthresh, default set to 1 (pnthresh=0.05), gonna use 5% here with hmC data because it has extra bad detection values but generally stick with default.
+hmc.pf<-pfilter(LUHMES.2_filtered, perc=5)
+
+  #0 samples having 5 % of sites with a detection p-value greater than 0.05 were removed 
+  #Samples removed:  
+  #1626 sites were removed as beadcount <3 in 5 % of samples 
+  #7685 sites having 1 % of samples with a detection p-value greater than 0.05 were removed 
+
+dim(hmc.pf) #  813,589      48 
+
+hmc.2_filtered<-hmc.pf
+save(hmc.2_filtered, file = "~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hmC_fully_filtered_06192020.RData")
+```
+
+We have removed another 9,311 probes. This leaves us with 813,589 probes for our analysis.  Including 16,106 X chr and 363 Y chr CpGs.
+
+#### Probe attrition plot
+```{r probe attrition plot, eval=F}
+df<-data.frame(sample_num_remaining=c(865918,865859,822682,813589), filter=c("EPIC Probe Number","Removal of SNP Probes", "Removal of Pidsley Cross Reactive Probes", "Removal of Bad AvgBeta/DetP Probes"))
+df$sample_num_lost<-c(0,sapply(2:nrow(df), function(x) df$sample_num_remaining[x-1]-df$sample_num_remaining[x]))
+
+df$filter<-factor(df$filter, rev(df$filter))
+          
+library(scales)
+ggplot(df)+
+  geom_bar(aes(filter,-sample_num_remaining), stat="identity", fill="grey70", color="black")+
+  geom_bar(aes(filter,sample_num_lost), stat="identity",fill="darkred", color="black")+
+  geom_text(aes(x=filter, y=-min(sample_num_remaining)/2,  label=comma(sample_num_remaining)))+
+  geom_text(aes(x=filter, y=max(sample_num_lost)/1.5,  label=comma(sample_num_lost)))+
+  geom_hline(yintercept=0)+
+  coord_flip()+theme_bw()+ylab("")+xlab("")+
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(colour = "grey20", size=12),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) +
+  scale_x_discrete(position = "top") 
+```
+![Summary of probes removed](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/probe_filtering.png)
+
+### Intra-Sample Normalization: Dasen
+
+BMIQ normalization is not appropriate since hydroxy data violates the 3-state beta mixture assumption. I will use dasen instead (wateRmelon package) to correct for probe type differences. Code provided by Rachel Edgar.
+```{r dasen, eval=FALSE}
+LUHMES.2.oxBS <- hmc.2_filtered[,hmc.2_filtered$Methylation=="ox"]
+LUHMES.2.BS <- hmc.2_filtered[,hmc.2_filtered$Methylation=="BS"]
+dim(LUHMES.2.oxBS) #  813589       24 
+dim(LUHMES.2.BS) #  813589       24 
+class(LUHMES.2.oxBS) #MethyLumiSet
+
+#setup for dasen: underscores in sample names don't work - the function will use these as separator characters. Additionally, need to remove space in some sample names.
+sampleNames(LUHMES.2.oxBS) <- gsub("_", ".", sampleNames(LUHMES.2.oxBS))
+sampleNames(LUHMES.2.oxBS) <- gsub(" ", "", sampleNames(LUHMES.2.oxBS))
+head(sampleNames(LUHMES.2.oxBS))
+
+sampleNames(LUHMES.2.BS) <- gsub("_", ".", sampleNames(LUHMES.2.BS))
+sampleNames(LUHMES.2.BS) <- gsub(" ", "", sampleNames(LUHMES.2.BS))
+head(sampleNames(LUHMES.2.BS))
+
+#dasen
+oxBS_dasen<-dasen(LUHMES.2.oxBS) 
+BS_dasen<-dasen(LUHMES.2.BS) 
+
+hmc_dasen <-combo(oxBS_dasen,BS_dasen)
+save(hmc_dasen, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hmc_prbFilter_dasen_norm_06182020.RData")
+```
+
+## Plotting betas before and after normalization
+```{r betas plot by norm, eval=F}
+LUHMES.2.oxBS <- hmc.2_filtered[,hmc.2_filtered$Methylation=="ox"]
+LUHMES.2.BS <- hmc.2_filtered[,hmc.2_filtered$Methylation=="BS"]
+
+## beta distributions: before normalization
+meta_hmc <- pData(hmc.2_filtered)
+meta_hmc$Sample_Label <- gsub("_", ".", meta_hmc$Sample_Label)
+meta_hmc$Sample_Label <- gsub(" ", "", meta_hmc$Sample_Label)
+meta_hmc<-meta_hmc[match(sampleNames(hmc_dasen), meta_hmc$Sample_Label),]
+sampleNames(hmc.2_filtered) <- gsub("_", ".", sampleNames(hmc.2_filtered))
+sampleNames(hmc.2_filtered) <- gsub(" ", "", sampleNames(hmc.2_filtered))
+
+hmc_Betas<-betas(hmc.2_filtered)
+Beta_sample<-hmc_Betas[sample(1:nrow(hmc_Betas), 100000),]
+Beta_sample_melted<- melt(Beta_sample)
+Beta_Plot<-Beta_sample_melted[which(Beta_sample_melted$value >= 0),]
+Beta_Plot<-merge(Beta_Plot,meta_hmc, by.x="Var2", by.y="Sample_Label")
+
+ggplot(Beta_Plot, aes(value, group=Var2, color=Methylation))+
+  geom_density(size=1)+theme_bw()+scale_color_manual(values=c("red","grey"))
+#this plot should resemble "betas_before_norm.png"
+
+## beta distributions: after normalization
+hmc_dasenBetas<-betas(hmc_dasen)
+Beta_sample<-hmc_dasenBetas[sample(1:nrow(hmc_dasenBetas), 100000),]
+Beta_sample_melted<- melt(Beta_sample)
+Beta_Plot<-Beta_sample_melted[which(!(is.na(Beta_sample_melted$value))),]
+Beta_Plot<-merge(Beta_Plot,meta_hmc, by.x="Var2", by.y="Sample_Label")
+
+ggplot(Beta_Plot, aes(value, group=Var2, color=Methylation))+
+  geom_density(size=1)+theme_bw()+scale_color_manual(values=c("grey","red"))
+#this plot should resemble "betas_after_norm.png"
+```
+![Beta value distribution before dasen normalization](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/betas_before_norm.png)
+
+![Beta value distribution after dasen normalization](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/betas_after_norm.png)
+
+Density plots seperated by probe type: 
+
+```{r betas plot by probe type, eval=F}
+#load("hmc_prbFilter_dasen_norm.RData")
+BS_dasen <- hmc_dasen[,grep("BS", sampleNames(hmc_dasen))] 
+oxBS_dasen <- hmc_dasen[,grep("ox", sampleNames(hmc_dasen))]
+
+#All
+type <- fData(hmc.2_filtered)$INFINIUM_DESIGN_TYPE
+
+before.betas <- betas(hmc.2_filtered)
+before.betas.I <- hmc.2_filtered[fData(hmc.2_filtered)$INFINIUM_DESIGN_TYPE=="I",]
+before.betas.I <- betas(before.betas.I)
+before.betas.I <- na.omit(before.betas.I)
+before.betas.II <- hmc.2_filtered[fData(hmc.2_filtered)$INFINIUM_DESIGN_TYPE=="II",]
+before.betas.II <- betas(before.betas.II)
+before.betas.II <- na.omit(before.betas.II)
+
+dasen.betas.I <- hmc_dasen[fData(hmc_dasen)$INFINIUM_DESIGN_TYPE=="I",]
+dasen.betas.I <- na.omit(betas(dasen.betas.I))
+dasen.betas.II <- hmc_dasen[fData(hmc_dasen)$INFINIUM_DESIGN_TYPE=="II",]
+dasen.betas.II <- na.omit(betas(dasen.betas.II))
+
+oPar<-par(mfrow=c(1,1))
+plot(c(0,1),c(0,8),type="n", xlab="Beta values", ylab="Density", main="Beta Value") 
+lines(density(before.betas.I),col=1,lty=1)
+lines(density(before.betas.II),col=1,lty=2)
+lines(density(dasen.betas.I),col=3,lty=1)
+lines(density(dasen.betas.II),col=3,lty=2)
+legend("top", inset=.05, cex=1, bty = "n", c("Raw Type 1","Raw Type 2", "Dasen Type 1", "Dasen Type 2"), col=c(1,1,3,3), lty=c(1,2,1,2), horiz=FALSE)
+par<-oPar
+#this plot should resemble "betas_by_probe_type.png"
+
+#oxBS
+type <- fData(LUHMES.2.oxBS)$INFINIUM_DESIGN_TYPE
+before.betas <- betas(LUHMES.2.oxBS)
+
+dasen <- betas(oxBS_dasen)
+oPar<-par(mfrow=c(1,1))
+plot(c(0,1),c(0,8),type="n", xlab="Beta values", ylab="Density", main="Beta Value") 
+
+lines(density(na.omit(before.betas[type=="I", ])),col=1,lty=1)
+lines(density(na.omit(before.betas[type=="II", ])),col=1,lty=1)
+lines(density(na.omit(dasen[type=="I", ])),col=3,lty=1)
+lines(density(na.omit(dasen[type=="II", ])),col=3,lty=1)
+legend("top", inset=.05, cex=1, bty = "n", c("Raw Type 1","Raw Type 2", "Dasen Type 1", "Dasen Type 2"), col=c(1,1,3,3), lty=c(1,2,1,2), horiz=FALSE)
+par<-oPar
+#this plot should resemble "betas_by_probe_type_oxBS.png"
+
+#BS
+type <- fData(LUHMES.2.BS)$INFINIUM_DESIGN_TYPE
+before.betas <- betas(LUHMES.2.BS)
+
+dasen <- betas(BS_dasen)
+oPar<-par(mfrow=c(1,1))
+plot(c(0,1),c(0,8),type="n", xlab="Beta values", ylab="Density", main="Beta Value") 
+lines(density(na.omit(before.betas[type=="I", ])),col=1,lty=1)
+lines(density(na.omit(before.betas[type=="II", ])),col=1,lty=1)
+lines(density(na.omit(dasen[type=="I", ])),col=3,lty=1)
+lines(density(na.omit(dasen[type=="II", ])),col=3,lty=1)
+legend("top", inset=.05, cex=1, bty = "n", c("Raw Type 1","Raw Type 2", "Dasen Type 1", "Dasen Type 2"), col=c(1,1,3,3), lty=c(1,2,1,2), horiz=FALSE)
+par<-oPar
+#this plot should resemble "betas_by_probe_type_BS.png"
+```
+
+![Beta value distribution by probe type, all samples](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/betas_by_probe_type.png)
+
+![Beta value distribution by probe type, oxBS samples](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/betas_by_probe_type_oxBS_09012021.png)
+
+![Beta value distribution by probe type, BS samples](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/betas_by_probe_type_BS_09012021.png)
+
+After applying dasen normalization, the beta distributions of each probe type are much more comparable to one another for both oxBS and BS data.
+
+## Technical Variation Investigation
+
+I will now determine the presence of batch effects. Prinicpal component analysis (PCA) along with correlation of variables to PCs will be used to determine this. 
+
+### Principal Component Analysis: oxBS data
+
+```{r PCA oxBS dasen, eval = FALSE}
+meta <- pData(oxBS_dasen)
+Bvals <- betas(oxBS_dasen)
+PCA_full<-princomp(Bvals[complete.cases(Bvals),])
+
+#Restructure meta
+meta$Sentrix_ID <- as.factor(meta$Sentrix_ID)
+meta$Sentrix_Position<-as.factor(meta$Sentrix_Position)
+meta$Sample_Well <- as.factor(meta$Sample_Well)
+meta$Collection_Date <- as.factor(meta$Collection_Date)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Methylation <- as.factor(meta$Methylation)
+colnames(meta)
+meta_categorical <- meta[,5:9]  # input column numbers in meta that contain categorical variables
+#all metadata here is categorical, so no need for continuous
+
+#ord<-1
+ord <- c(seq(1:ncol(meta_categorical)))
+
+#PCs_to_view<-10
+
+#PCA plot: code by Nicole Gladish & Rachel Edgar
+#Code wasn't working without meta_continuous so I modified it slightly
+#removed "ord" definition inside function (defined externally here instead)
+#changed "rotation" to "loadings" (bc used princomp - see note in the function documentation)
+source("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_Plot_Function_no_continuous.R")
+PCA_Plot(PCA_full, MTC = T, Discrete = F) # This multiple test corrects and provides continuous representation of q-values
+#this should produce two plots resembling "PCA_scree_oxBS_dasen.png" and "PCA_heat_oxBS_dasen.png." The screen plot will show up in the plot window by default. Hit the "back" button in the plot window to see the heatmap.
+```
+
+![Scree plot: Multiple test-corrected PCA on dasen-normalized oxBS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_scree_oxBS_dasen.png)
+![Heatmap: Multiple test-corrected PCA on dasen-normalized oxBS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_heat_oxBS_dasen_06182020.png)
+
+#PCA on dasen-normalized BS data
+```{r PCA BS dasen, eval = FALSE}
+meta <- pData(BS_dasen)
+Bvals <- betas(BS_dasen)
+PCA_full<-princomp(Bvals[complete.cases(Bvals),])
+
+#Restructure meta
+meta$Sentrix_ID <- as.factor(meta$Sentrix_ID)
+meta$Sentrix_Position<-as.factor(meta$Sentrix_Position)
+meta$Sample_Well <- as.factor(meta$Sample_Well)
+meta$Collection_Date <- as.factor(meta$Collection_Date)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Methylation <- as.factor(meta$Methylation)
+colnames(meta)
+meta_categorical <- meta[,5:9]  # input column numbers in meta that contain categorical variables
+#all metadata here is categorical, so no need for continuous
+
+ord <- c(seq(1:ncol(meta_categorical)))
+
+PCA_Plot(PCA_full, MTC = T, Discrete = F)
+#this should produce two plots resembling "PCA_scree_BS_dasen.png" and "PCA_heat_BS_dasen.png." The screen plot will show up in the plot window by default. Hit the "back" button in the plot window to see the heatmap.
+```
+![Scree plot: Multiple test-corrected PCA on dasen-normalized BS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_scree_BS_dasen.png)
+![Heatmap: Multiple test-corrected PCA on dasen-normalized BS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_heat_BS_dasen_06182020.png)
+
+
+## Metadata correlation heat map
+```{r meta correlations, eval = FALSE}
+#Ensure character variables are factors; then create a chi square pvalue matrix (to allow for correlations between categorical variables)
+for (i in 1:ncol(meta_categorical)){
+  if (class(meta_categorical[,i])!="factor"){
+    meta_categorical[,i] <- as.factor(meta_categorical[,i])}}
+
+correlation_pval <- function(meta){
+  cor_matrix <- matrix(nrow=ncol(meta), ncol=ncol(meta))
+  colnames(cor_matrix) <- colnames(meta)
+  rownames(cor_matrix) <- colnames(meta)
+  for(x in 1:ncol(meta)){
+   
+     #x is continuous
+    if(is.integer(meta[,x])==TRUE|is.numeric(meta[,x])==TRUE){
+       for(y in 1:ncol(meta)){
+         
+         #y is continuous - Pearson correlation
+         if(is.integer(meta[,y])==TRUE|is.numeric(meta[,y])==TRUE){
+          pval <- cor.test(meta[,x], meta[,y])$p.value}
+         
+         #y is categorical - ANOVA
+         if(is.factor(meta[,y])==TRUE){
+            pval <- summary(aov(meta[,x] ~ meta[,y]))[[1]]$`Pr(>F)`[1]} 
+         
+         #else{
+     # print(paste("y error in x continuous: column ", y, " is not integer, numeric, or factor", sep=""))}
+         
+         if(is.null(pval)==TRUE){ pval <- NA }
+         cor_matrix[x,y] <- pval
+         cor_matrix[y,x] <- pval}} 
+    
+    #x is categorical
+    if(is.factor(meta[,x])==TRUE){
+      for(y in 1:ncol(meta)){
+      
+      #y is continuous - ANOVA
+      if(is.integer(meta[,y])==TRUE|is.numeric(meta[,y])==TRUE){
+         pval <- summary(aov(meta[,y] ~ meta[,x]))[[1]]$`Pr(>F)`[1]}
+      
+      #y is categorical - chi squared test
+      if(is.factor(meta[,y])==TRUE){
+        pval <- chisq.test(meta[,x], meta[,y])$p.value }
+        
+      #else{
+      #print(paste("y error in x categorical: column ", y, " is not integer, numeric, or factor", sep=""))} 
+        
+      if(is.null(pval)==TRUE){ pval <- NA }
+      cor_matrix[x,y] <- pval
+      cor_matrix[y,x] <- pval}}
+        
+   # else{
+      #print(paste("Error in x: column ", x, " is not integer, numeric, or factor", sep=""))}  
+    }
+
+    return(cor_matrix)  }
+
+
+cormat <- correlation_pval(meta_categorical)
+
+# Get lower triangle of the correlation matrix
+  get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+
+upper_tri <- get_upper_tri(cormat)
+
+# Melt the correlation matrix
+library(reshape2)
+# Heatmap
+library(ggplot2)
+
+#colour if sig
+upper_tri <- get_upper_tri(cormat)
+for(x in 1:nrow(upper_tri)){
+  for(y in 1:ncol(upper_tri)){
+    if(is.na(upper_tri[x,y])==FALSE){
+    if(as.numeric(upper_tri[x,y])<=0.001){upper_tri[x,y]<-"<=0.001"}else{
+    if(as.numeric(upper_tri[x,y])<=0.01){upper_tri[x,y]<-"<=0.01"}else{
+      if(as.numeric(upper_tri[x,y])<=0.05){upper_tri[x,y]<-"<=0.05"}else{upper_tri[x,y]<-">0.05"}}}}
+  }}
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+scale_fill_manual(values=c("#084594","#4292c6","#9ecae1","#deebf7"), name="p-value") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+#this plot should resemble "metadata_correlation.png"
+```
+
+![Meta data correlation matrix](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/metadata_correlation.png)
+
+
+Passage and collection date are confounded, which is expected. I'll run ComBat correction on passage, which should account for the variation in both.
+
+
+## Batch Correction: ComBat
+
+Here I will use ComBat to correct for batch effects, starting with the stronger effect then moving to the less strong ones (as identified with PCA). For oxBS data I will correct for position, passage, and chip in that order. For BS data I will correct for passage, chip, and position in that order.
+
+### oxBS Batch Variation Correction
+
+```{r oxBS ComBat, eval = FALSE}
+####Position
+Mvals <- beta2m(betas(oxBS_dasen))
+#replace extreme negative values
+Mvals[Mvals==-Inf] <- -18
+
+test.bat<- ComBat(Mvals, oxBS_dasen$Sentrix_Position)
+oxBS_dasen_combat <- oxBS_dasen
+betas(oxBS_dasen_combat) <- m2beta(test.bat)
+
+####Passage
+Mvals <- beta2m(betas(oxBS_dasen_combat))
+
+test.bat<- ComBat(Mvals, oxBS_dasen_combat$Passage)
+betas(oxBS_dasen_combat) <- m2beta(test.bat)
+
+####Chip
+Mvals <- beta2m(betas(oxBS_dasen_combat))
+
+test.bat<- ComBat(Mvals, oxBS_dasen_combat$Sentrix_ID)
+betas(oxBS_dasen_combat) <- m2beta(test.bat)
+save(oxBS_dasen_combat, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/oxBS_dasen_combat_06182020.RData")
+```
+
+### BS Batch Variation Correction 
+
+```{r BS comBat chip, eval = FALSE}
+####Passage
+Mvals <- beta2m(betas(BS_dasen))
+#replace extreme negative values
+Mvals[Mvals==-Inf] <- -18
+
+test.bat<- ComBat(Mvals, BS_dasen$Passage)
+BS_dasen_combat <- BS_dasen
+betas(BS_dasen_combat) <- m2beta(test.bat)
+
+####Chip
+Mvals <- beta2m(betas(BS_dasen_combat))
+
+test.bat<- ComBat(Mvals, BS_dasen_combat$Sentrix_ID)
+betas(BS_dasen_combat) <- m2beta(test.bat)
+
+####Position
+Mvals <- beta2m(betas(BS_dasen_combat))
+
+test.bat<- ComBat(Mvals, BS_dasen_combat$Sentrix_Position)
+betas(BS_dasen_combat) <- m2beta(test.bat)
+save(BS_dasen_combat, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/BS_dasen_combat_06182020.RData")
+```
+
+
+# Principal Component Analysis of batch-corrected methylation data
+
+###PCA on batch-corrected oxBS data
+```{r PCA oxBS ComBat, eval = FALSE}
+meta <- pData(oxBS_dasen_combat)
+Bvals <- betas(oxBS_dasen_combat)
+PCA_full<-princomp(Bvals[complete.cases(Bvals),])
+
+#Restructure meta
+meta$Sentrix_ID <- as.factor(meta$Sentrix_ID)
+meta$Sentrix_Position<-as.factor(meta$Sentrix_Position)
+meta$Sample_Well <- as.factor(meta$Sample_Well)
+meta$Collection_Date <- as.factor(meta$Collection_Date)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Methylation <- as.factor(meta$Methylation)
+colnames(meta)
+meta_categorical <- meta[,5:9]  # input column numbers in meta that contain categorical variables
+#all metadata here is categorical, so no need for continuous
+
+#ord<-1
+ord <- c(seq(1:ncol(meta_categorical)))
+
+PCA_Plot(PCA_full, MTC = T, Discrete = F)
+```
+
+![Scree plot: Multiple test-corrected PCA on dasen-normalized, ComBat-corrected oxBS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_scree_oxBS_combat.png)
+![Heatmap: Multiple test-corrected PCA on dasen-normalized, ComBat-corrected oxBS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_heat_oxBS_combat_06182020.png)
+
+###PCA on batch-corrected BS data
+```{r PCA BS ComBat, eval=FALSE}
+meta <- pData(BS_dasen_combat)
+Bvals <- betas(BS_dasen_combat)
+PCA_full<-princomp(Bvals[complete.cases(Bvals),])
+
+#Restructure meta
+meta$Sentrix_ID <- as.factor(meta$Sentrix_ID)
+meta$Sentrix_Position<-as.factor(meta$Sentrix_Position)
+meta$Sample_Well <- as.factor(meta$Sample_Well)
+meta$Collection_Date <- as.factor(meta$Collection_Date)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Methylation <- as.factor(meta$Methylation)
+colnames(meta)
+meta_categorical <- meta[,5:9]  # input column numbers in meta that contain categorical variables
+#all metadata here is categorical, so no need for continuous
+
+#ord<-1
+ord <- c(seq(1:ncol(meta_categorical)))
+
+PCA_Plot(PCA_full, MTC = T, Discrete = F)
+```
+
+![Scree plot: Multiple test-corrected PCA on dasen-normalized, ComBat-corrected BS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_scree_BS_dasen_combat.png)
+![Heatmap: Multiple test-corrected PCA on dasen-normalized, ComBat-corrected BS data](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_heat_BS_dasen_combat_06182020.png)
+
+## 5hmC calculation
+I will calculate hydroxymethylation betas by subtracting the oxBS beta values (mC) from the BS beta values (mC & hmC). A detectability threshold will be applied to filter out sites where the measurement is unreliable due to technical noise. This threshold will be set as the 95% quantile of hydroxy values with a negative measurement after subtraction.
+```{r hmC calc, eval=F}
+hydroxy_values <- betas(BS_dasen_combat) - betas(oxBS_dasen_combat)
+
+# threshold for detectable
+hydroxy_values_plot<-melt(hydroxy_values)
+
+ggplot(hydroxy_values_plot, aes(value, group=Var2))+geom_density(size=1, color="grey")+theme_bw()
+#this plot should resemble "hydroxy_values.png"
+
+neg_hydroxy_values<-hydroxy_values_plot[which(hydroxy_values_plot$value<0),]
+hydroxy_threshold<-abs(quantile(neg_hydroxy_values$value, 0.05))
+hydroxy_threshold #0.03557117  (old)
+#0.03565124 (new 06/18/2020)
+
+mean_hydroxy_values<-rowMeans(hydroxy_values)
+hydroxy_values_detectable<-hydroxy_values[which(mean_hydroxy_values>=hydroxy_threshold),]
+length(hydroxy_values_detectable)/length(hydroxy_values) #29% passed detectability threshold
+nrow(hydroxy_values_detectable) #233,923 CpG sites had detectable hydroxymethylation (old)
+#233,440 sites (new)
+save(hydroxy_values_detectable, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hydroxy_values_detectable_06182020.RData")
+
+hydroxy_values_plot<-melt(hydroxy_values_detectable)
+
+ggplot(hydroxy_values_plot, aes(value, group=Var2))+geom_density(size=1, color="grey")+theme_bw()
+```
+
+![Hydroxymethylation values calculated by subtraction](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hydroxy_values.png)
+![Hydroxymethylation values passing detectability threshold](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hydroxy_values_detectable.png)
+
+The technical background for hydroxymethylation values was determined to be approximately 3.6%. 233,440/813,589 CpG sites (29% of total) passed the hydroxymethylation detectability threshold.
+
+#PCA on hmC values
+```{r PCA hmC, eval = FALSE}
+Bvals <- hydroxy_values_detectable
+PCA_full<-princomp(Bvals[complete.cases(Bvals),])
+
+meta$Sentrix_ID <- as.factor(meta$Sentrix_ID)
+meta$Sentrix_Position<-as.factor(meta$Sentrix_Position)
+meta$Sample_Well <- as.factor(meta$Sample_Well)
+meta$Collection_Date <- as.factor(meta$Collection_Date)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Methylation <- as.factor(meta$Methylation)
+meta$Passage <- as.factor(meta$Passage)
+meta$Sample_Label <- as.factor(meta$Sample_Label)
+colnames(meta)
+meta_categorical <- meta[,c(5:9)]  # input column numbers in meta that contain categorical variables
+#all metadata here is categorical, so no need for continuous
+
+ord <- seq(1:ncol(meta_categorical))
+
+PCA_Plot(PCA_full, MTC = T, Discrete = F)
+#PC2 accounts for around 8% of variance but doesn't look correlated to anything (PC1 and PC3 are associated with genotype).
+```
+
+![Scree plot: Multiple test-corrected PCA on hydroxymethylation values](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_scree_hmC_06182020.png)
+![Heatmap: Multiple test-corrected PCA on hydroxymethylation values](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/PCA_heat_hmC_06182020.png)
+
+
+## Saving Pre-Processed and Normalized Object
+
+Removing the technical replicates: 
+
+```{r tech removal, eval = FALSE}
+#Calculate correlation between tech reps
+betas_oxBS <- betas(oxBS_dasen_combat)
+cor(betas_oxBS[,5], betas_oxBS[,13]) #0.997844
+
+#calculate RMSE
+library(Metrics)
+rmse(betas_oxBS[,5], betas_oxBS[,13]) #0.02191435
+
+betas_BS <- betas(BS_dasen_combat)
+cor(betas_BS[,5], betas_BS[,13]) #0.9990978
+rmse(betas_BS[,5], betas_BS[,13]) #0.01448717
+
+#Remove tech reps from mC/hmC data and save
+oxBS_dasen_combat <- oxBS_dasen_combat[,c(1:12, 14:24)]
+mC_methylumi_N <- oxBS_dasen_combat
+save(mC_methylumi_N, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+
+hydroxy_values_detectable <- hydroxy_values_detectable[,c(1:12, 14:24)]
+hmC_betas_matrix_N <- hydroxy_values_detectable
+save(hmC_betas_matrix_N, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_hmC_clean_SS_06182020.RData")
+```
+
+
+# References:
+
+Bibikova, M., Barnes, B., Tsan, C., Ho, V., Klotzle, B., Le, J. M., Zhang, Z., Schroth, G. P., Gunderson, K. L., Fan, J. B. and Shen, R. (2011). High density DNA methylation array with single CpG site resolution. Genomics, 98(4), 288–295.
+
+Du, P., Kibbe, W.A., Lin and S.M. (2008). “lumi: a pipeline for processing Illumina microarray.” Bioinformatics.
+
+Fortin JP, Triche TJ, and Hansen KD. Preprocessing, normalization and integration of the Illumina HumanMethylationEPIC array with minfi. (2016). Preprocessing, normalization and integration of the Illumina HumanMethylationEPIC array with minfi.
+
+Johnson, W.E., Rabinovic, A., and Li, C. (2007). Adjusting batch effects in microarray expression data using Empirical Bayes methods. Biostatistics 8(1):118-127.
+
+Pidsley, R., Zotenko, E., Peters, T. J., Lawrence, M. G., Risbridger, G. P., Molloy, P., et al. (2016). Critical evaluation of the Illumina MethylationEPIC BeadChip microarray for whole-genome DNA methylation profiling. Genome Biology, 17(1), 208.
+
+Price, M. E., Cotton, A. M., Lam, L. L., Farré, P., Emberly, E., Brown, C. J., Robinson, W. P., Kobor, M. S. (2013). Additional annotation enhances potential for biologically-relevant analysis of the Illumina Infinium HumanMethylation450 BeadChip array. Epigenetics & Chromatin, 6(1), 4.
+
+Teschendorff, A. E., Marabita, F., Lechner, M., Bartlett, T., Tegner, J., Gomez-Cabrero, D., & Beck, S. (2013). A beta-mixture quantile normalization method for correcting probe design bias in Illumina Infinium 450 k DNA methylation data. Bioinformatics (Oxford, England), 29(2), 189–196.
