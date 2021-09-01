@@ -4,7 +4,7 @@ This code is for the manuscript [Alpha-synuclein induces epigenomic dysregulatio
 
 Files:
 
-"1-LUHMES_clean_SS_0618020.Rmd" contains pre-processing, normalization, and hmC calculations. Updated file (08/30/2021) fixes an error in generating the beta distribution plots before/after normalization separated by probe type and conversion type which does not affect any downstream analyses. Also see "PCA_Plot_Function_no_continuous.R" sourced in this script for PCA plots.
+"1-LUHMES_clean_SS_0618020.Rmd" contains pre-processing, normalization, and hmC calculations. Updated file (09/01/2021) fixes an error in generating the beta distribution plots before/after normalization separated by probe type and conversion type which does not affect any downstream analyses. Also see "PCA_Plot_Function_no_continuous.R" sourced in this script for PCA plots.
 
 "2a-LUHMES_annotate_all_transcripts.Rmd" annotates all gene transcripts to each EPIC array probe in the final dataset.
 
