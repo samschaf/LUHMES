@@ -1,0 +1,93 @@
+DecipherPD LUHMES EPIC Array Runs - Differential Methylation Analysis
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: Dec 14, 2021
+
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+```{r, results='hide', eval=F}
+setwd("~/")
+library(dplyr)
+library(readxl)
+```
+
+#Permute overlaps
+Using linear modeling, a certain number of significant probes that were unique to each genotype and shared between each genotype were identified.
+
+I will pull two random sets of the same number of probes representing simulated WT/A30P sets, and a set of genes from the mRNA list the same size as the number of differentially expressed genes. The degree of overlap will be calculated using 1000 permutations. Each iteration of overlap greater than the real number will be counted toward the enrichment p value, while each iteration less than the real number will be counted toward the depletion p value.
+
+```{r perm, eval=F}
+#cpg-to-gene annotation
+master_df <- read.delim("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/master_df_genenames_mC.txt")
+
+overlap_permutation_enrichment<-function(CpG_list_1, CpG_list_2, DEGs, background.probes.1, background.probes.2, background.genes, permutation_number){
+  
+    Hit_number_1<-length(CpG_list_1)
+    Hit_number_2<-length(CpG_list_2)
+    DEGs_number <- length(DEGs)
+    
+  ## Boot strapping (to see if hits more in feature than expected)
+  bootstrap_overlap<-lapply(1:permutation_number, function(x){
+    set.seed(x)
+    #take a random sample of all probes or genes, same size as your hit list
+    rnd_CpGs_1<-background.probes.1[sample(1:length(background.probes.1),Hit_number_1)]
+    rnd_genes_1 <- master_df[master_df$site %in% rnd_CpGs_1,"gene_name"]
+    rnd_CpGs_2<-background.probes.2[sample(1:length(background.probes.2),Hit_number_2)]
+    rnd_genes_2 <- master_df[master_df$site %in% rnd_CpGs_2,"gene_name"]
+    rnd_genes_3 <- background.genes[sample(1:length(background.genes),DEGs_number)]
+    #calculate the overlap between genes from each dataset
+    overlap <- length(rnd_genes_1[rnd_genes_1 %in% rnd_genes_2 & rnd_genes_1 %in% rnd_genes_3])
+  })
+  #bind together each permutation
+  bootstrap_overlap<-do.call(rbind, bootstrap_overlap)
+   
+  print("Permutation P values for enrichment and depletion")
+  gene_list_1 <- master_df[master_df$site %in% CpG_list_1,"gene_name"]
+  gene_list_2 <- master_df[master_df$site %in% CpG_list_2,"gene_name"]
+  real_overlap <- length(gene_list_1[gene_list_1 %in% gene_list_2 & gene_list_1 %in% DEGs])
+    #how many iterations of bootstrapping found MORE overlapping probes than the real number? Divide this by the number of permutations to get a p-value
+    enrich_p<-length(which(bootstrap_overlap>=real_overlap))/permutation_number
+    #how many iterations of bootstrapping found LESS overlapping probes than the real number? Divide this by the number of permutations to get a p-value
+    depletion_p<-length(which(bootstrap_overlap<=real_overlap))/permutation_number
+    print(paste("Enrichment: ", enrich_p, "; Depletion ", depletion_p,sep=""))
+  }
+  
+
+#Hydroxy
+WT_hmC_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+
+#Methyl - WT
+WT_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+summary(WT_gene_list$threshold) #29333 TRUE
+
+#expression - WT
+RNA_WT <- read_excel("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Table S1.xlsx", skip=1)
+
+#WT permutation
+CpG_list_1 <- WT_gene_list[WT_gene_list$threshold==TRUE,"Name"]
+CpG_list_2 <- WT_hmC_gene_list[WT_hmC_gene_list$threshold==TRUE,"Name"]
+DEGs <- unlist(unclass(RNA_WT[abs(RNA_WT$log2FoldChange)>=0.5 & RNA_WT$pvalue<=0.01,"gene_name"]))
+background.genes <- unlist(unclass(RNA_WT$gene_name))
+background.probes.1 <- WT_gene_list$Name
+background.probes.2 <- WT_hmC_gene_list$Name
+permutation_number <- 1000
+
+overlap_permutation_enrichment(CpG_list_1, CpG_list_2, DEGs, background.probes.1, background.probes.2, background.genes, permutation_number)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0.431; Depletion 0.614"
+
+#A30P
+A30P_hmC_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+summary(A30P_gene_list$threshold) #6529 TRUE
+RNA_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_A30P.csv", skip=1)
+
+CpG_list_1 <- A30P_gene_list[A30P_gene_list$threshold==TRUE,"Name"]
+CpG_list_2 <- A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==TRUE,"Name"]
+DEGs <- unlist(unclass(RNA_A30P[abs(RNA_A30P$log2FoldChange)>=0.5 & RNA_A30P$pvalue<=0.01,"gene_name"]))
+
+overlap_permutation_enrichment(CpG_list_1, CpG_list_2, DEGs, background.probes.1, background.probes.2, background.genes, permutation_number)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0.171; Depletion 0.91"
+```

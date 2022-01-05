@@ -1,0 +1,398 @@
+DecipherPD LUHMES EPIC Array Runs - Comparison to mouse model of aSyn overexpression
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: Dec 23, 2021
+
+This project investigates the impact of alpha-synuclein genotype on DNA methylation and hydroxymethylation in human dopaminergic neurons, as part of the DecipherPD grant. The model used was Lund human mesencephalic (LUHMES) cells, a fetal midbrain cell line, that were differentiated into dopaminergic neurons.
+
+Tiago Outerio's group (Gottingen, Germany) created LUHMES overexpressing wild type or WT mutant human alpha-synuclein (SNCA) as well as GFP. DNA was extracted from 7 replicates of control cells, 8 replicates of SNCA-overexpressing (SNCA-OE) cells, and 8 replicates of WT cells. Each sample was split into two for bisulfite and oxidative bisulfite conversion, and these were run on the EPIC array. DNA methylation was caluclated using the oxidative bisulfite-converted samples, while DNA hydroxymethylation was calculated by subtracting the oxidative bisulfite-converted beta values (mC) from the bisulfite-converted beta values (hmC + mC).
+
+In this script, I will compare hits found in LUHMES associated with WT aSyn overexpression to hits associated with WT aSyn expression in the hippocampus of SNCA BAC mice raised to 6 or 12 months in standard housing (Julia Schulze-Hentrich, University of Tuebingen; 12 months analysis by Samantha Schaffner, 6 months analysis by Sanjit Bains).
+
+#Libraries and functions
+```{r libraries, eval=F}
+setwd("~/")
+library(biomaRt) #for mouse-to-human gene conversions
+library(dplyr)
+library(ermineR)
+Sys.setenv(JAVA_HOME="/mnt/koborlab-hpc/miniconda2/")
+```
+
+### Read in LUHMES DNAm and DNAhm data
+```{r LUHMES, eval=F}
+LUHMES_DMPs_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+LUHMES_DHMPs_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+```
+
+### Load in mouse DNAm and DNAhm data
+```{r mice, eval=F}
+load("~/KoborLab/kobor_space/sschaffner/DecipherPD_RRBS/SNCA_OE/Hippocampus/12m_EE/methdiff/methylation/BiSeq_site_specific/WTSE_TGSE/BH/betaResults_WTSE_TGSE_BH.RData") #"betaResults"
+load("~/KoborLab/kobor_space/sschaffner/DecipherPD_RRBS/SNCA_OE/Hippocampus/12m_EE/methdiff/hydroxy/BiSeq_site_specific/WTSE_TGSE/BH/betaResults_hydroxy_WTSE_TGSE_BH.RData") #"betaResults_WTSE_TGSE_hmC"
+```
+
+## Compare hits: DNAm
+
+### Reference human-to-mouse gene annotation
+```{r DNAm anno, eval=F}
+#LUHMES: delta beta > 0.05 and padj < 0.05
+#mice: delta beta > 0.1 and padj < 0.05
+
+#"multi_transcript_df" contains the accession ID for the longest transcript associated with each CpG site that has multiple associated transcripts, but not the gene name (in future, put the gene name into this reference to make things more efficient!). 
+#"transcript_df" contains all possible transcript-cpg pairs (including sites with one associated transcript)
+#merging these first to get a data frame with all sites respresnted once, and their longest transcript
+multi_transcript_df <- read.delim("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/multi_transcript_df_202008.txt")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/transcript_df_062020.RData")
+nrow(transcript_df_single <- transcript_df[-which(transcript_df$site %in% multi_transcript_df$site),]) #515,730
+colnames(multi_transcript_df)[2] <- "acc"
+nrow(master_df <- rbind(multi_transcript_df[,1:2], transcript_df_single[,c(1,3)])) #813,589
+#nrow(master_df_hmC <- master_df[master_df$site %in% DHMPs_WT$Name,]) #233,440
+
+#getting differentially methylated genes list and their mouse homologs
+mart_human <- useMart("ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl", host="feb2014.archive.ensembl.org",path="/biomart/martservice",archive=FALSE, verbose=TRUE) #hg19
+mart_mouse <- useMart("ENSEMBL_MART_ENSEMBL", dataset="mmusculus_gene_ensembl", host="feb2014.archive.ensembl.org",path="/biomart/martservice",archive=FALSE, verbose=TRUE)
+
+#master_df_sub <- master_df[master_df$site %in% LUHMES_DMPs_WT$Name,]
+mrna <-  master_df[grep("NM", master_df$acc),]
+ncrna <- master_df[grep("NR", master_df$acc),]
+
+######## mRNA transcripts
+
+#1: mRNA transcripts to human ensembl and external gene IDs
+LUHMES_mC_prot_genes <- getBM(mart=mart_human, filters="refseq_mrna", values=mrna$acc, attributes=c("refseq_mrna", "ensembl_gene_id", "external_gene_id")) #use human ensembl genes to link queries                                 
+nrow(LUHMES_mC_prot_genes <- distinct(LUHMES_mC_prot_genes)) #20,181
+length(unique(LUHMES_mC_prot_genes$external_gene_id)) #18,103
+
+#2: Human ensembl gene IDs to mouse ensembl gene IDs
+LUHMES_mC_prot_mus <- getBM(mart=mart_human, filters="ensembl_gene_id", values=unique(LUHMES_mC_prot_genes$ensembl_gene_id), attributes=c("ensembl_gene_id","mmusculus_homolog_ensembl_gene", "mmusculus_homolog_chromosome", "mmusculus_homolog_chrom_start", "mmusculus_homolog_chrom_end")) #use mouse ensembl genes to link queries
+nrow(LUHMES_mC_prot_mus) #20,237
+length(unique(LUHMES_mC_prot_mus$mmusculus_homolog_ensembl_gene)) #18,185
+
+#3: Mouse ensembl gene IDs to mouse external gene IDs
+LUHMES_mC_prot_mus_genes <- getBM(mart=mart_mouse, filters="ensembl_gene_id", values=unique(LUHMES_mC_prot_mus$mmusculus_homolog_ensembl_gene), attributes=c("ensembl_gene_id","external_gene_id"))
+nrow(LUHMES_mC_prot_mus_genes) #18,184
+length(unique(LUHMES_mC_prot_mus_genes$external_gene_id)) #18,164
+
+####annotating human transcript --> gene df with mouse info
+LUHMES_mC_prot_genes_sub <- LUHMES_mC_prot_genes[match(LUHMES_mC_prot_mus$ensembl_gene_id, LUHMES_mC_prot_genes$ensembl_gene_id),]
+all.equal(LUHMES_mC_prot_genes_sub$ensembl_gene_id, LUHMES_mC_prot_mus$ensembl_gene_id) #TRUE
+LUHMES_mC_prot_genes_sub$mus_ensembl_gene <- LUHMES_mC_prot_mus$mmusculus_homolog_ensembl_gene
+
+LUHMES_mC_prot_genes_sub2 <- LUHMES_mC_prot_genes_sub[match(LUHMES_mC_prot_mus_genes$ensembl_gene_id, LUHMES_mC_prot_genes_sub$mus_ensembl_gene),]
+all.equal(LUHMES_mC_prot_genes_sub2$mus_ensembl_gene, LUHMES_mC_prot_mus_genes$ensembl_gene_id) #TRUE
+LUHMES_mC_prot_genes_sub2$mus_external_gene <- LUHMES_mC_prot_mus_genes$external_gene_id
+
+######## ncRNA transcripts
+
+#1: ncRNA transcripts to human ensembl and external gene IDs
+LUHMES_mC_ncrna_genes <- getBM(mart=mart_human, filters="refseq_ncrna", values=unique(ncrna$acc), attributes=c("refseq_ncrna", "ensembl_gene_id", "external_gene_id")) #use human ensembl genes to link queries                                 
+nrow(LUHMES_mC_ncrna_genes) #2,544
+length(unique(LUHMES_mC_ncrna_genes$external_gene_id)) #2,379
+
+#2: Human ensembl gene IDs to mouse ensembl gene IDs
+LUHMES_mC_ncrna_mus <- getBM(mart=mart_human, filters="ensembl_gene_id", values=unique(LUHMES_mC_ncrna_genes$ensembl_gene_id), attributes=c("ensembl_gene_id","mmusculus_homolog_ensembl_gene", "mmusculus_homolog_chromosome", "mmusculus_homolog_chrom_start", "mmusculus_homolog_chrom_end")) #use mouse ensembl genes to link queries
+nrow(LUHMES_mC_ncrna_mus) #3,066
+length(unique(LUHMES_mC_ncrna_mus$mmusculus_homolog_ensembl_gene)) #351
+
+#3: Mouse ensembl gene IDs to mouse external gene IDs
+LUHMES_mC_ncrna_mus_genes <- getBM(mart=mart_mouse, filters="ensembl_gene_id", values=unique(LUHMES_mC_ncrna_mus$mmusculus_homolog_ensembl_gene), attributes=c("ensembl_gene_id","external_gene_id"))
+nrow(LUHMES_mC_ncrna_mus_genes) #350
+length(unique(LUHMES_mC_ncrna_mus_genes$external_gene_id)) #350
+
+####annotating human transcript --> gene df with mouse info
+LUHMES_mC_ncrna_genes_sub <- LUHMES_mC_ncrna_genes[match(LUHMES_mC_ncrna_mus$ensembl_gene_id, LUHMES_mC_ncrna_genes$ensembl_gene_id),]
+all.equal(LUHMES_mC_ncrna_genes_sub$ensembl_gene_id, LUHMES_mC_ncrna_mus$ensembl_gene_id) #TRUE
+LUHMES_mC_ncrna_genes_sub$mus_ensembl_gene <- LUHMES_mC_ncrna_mus$mmusculus_homolog_ensembl_gene
+
+LUHMES_mC_ncrna_genes_sub2 <- LUHMES_mC_ncrna_genes_sub[match(LUHMES_mC_ncrna_mus_genes$ensembl_gene_id, LUHMES_mC_ncrna_genes_sub$mus_ensembl_gene),]
+all.equal(LUHMES_mC_ncrna_genes_sub2$mus_ensembl_gene, LUHMES_mC_ncrna_mus_genes$ensembl_gene_id) #TRUE
+LUHMES_mC_ncrna_genes_sub2$mus_external_gene <- LUHMES_mC_ncrna_mus_genes$external_gene_id
+
+######### Combine ncRNA and prot genes
+colnames(LUHMES_mC_prot_genes_sub2)[1] <- "refseq_acc"
+colnames(LUHMES_mC_ncrna_genes_sub2)[1] <- "refseq_acc"
+nrow(LUHMES_mC_human_to_mouse <- rbind(LUHMES_mC_prot_genes_sub2, LUHMES_mC_ncrna_genes_sub2)) #18,534 transcripts from LUHMES background CpG list with human --> mouse gene homolog annotations
+write.csv(LUHMES_mC_human_to_mouse, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/human_to_mouse_tx_mC.csv", row.names=FALSE)
+```
+
+### Comparing hits from each organism at gene-level
+```{r compare mC, eval=F}
+anno <- read.delim("~/KoborLab/kobor_space/shared_coding_resource/annEPIC_GO_v4.txt")
+length(LUHMES_WT_genes <- unique(anno[anno$CpG %in% LUHMES_DMPs_WT[LUHMES_DMPs_WT$threshold==TRUE,"Name"],"Gene_name"])) #8,391
+
+nrow(betaResults_sub <- betaResults[betaResults$gene %in% LUHMES_mC_human_to_mouse[LUHMES_mC_human_to_mouse$external_gene_id %in% LUHMES_WT_genes,"mus_external_gene"],]) #87,155 cytosines mapping to genes differentially methylated in WT LUHMES are also covered in RRBS dataset after QC
+length(unique(betaResults_sub$gene)) #4,037/8,391 LUHMES genes
+unique(betaResults$gene[grep("Wdr76",betaResults$gene)]) #0 - not in annotation
+unique(betaResults$gene[grep("Grik",betaResults$gene)]) #"Grik3" "Grik5" "Grik4" "Grik2" "Grik1"
+
+#check how many were hits in mice (padj < 0.05 and DB > 0.1)
+nrow(betaResults_sub_sig <- betaResults_sub[betaResults_sub$threshold==TRUE,]) #45 cytosines
+unique(betaResults_sub_sig$gene) #44 genes
+# [1] "Bivm"     "Etl4"     "Ptges"    "Myo3b"    "Pak6"     "Cdh22"    "Zfp64"   
+# [8] "Nkain3"   "Ptprf"    "Grhl3"    "Gm694"    "Prdm16"   "Grm3"     "Slc5a1"  
+#[15] "Shroom3"  "Foxk1"    "Ptprz1"   "Itpr1"    "Ninj2"    "Hif3a"    "Csmd1"   
+#[22] "Slc20a2"  "Adam18"   "Arhgap20" "Map7"     "Col13a1"  "Tac2"     "Meis1"   
+#[29] "Wwc1"     "Galnt10"  "Hpcal1"   "Fam172a"  "Dnah1"    "Xkr6"     "Adamts12"
+#[36] "Trio"     "Polr2f"   "Masp1"    "Lsamp"    "Tmem232"  "Mapk4"    "Loxhd1"  
+#[43] "Fam160b1" "Shroom2" 
+
+####pathway enrichment on these genes
+##first, create annotation for all the mouse genes also covered on the EPIC array and in the subset of probes after QC filters on LUHMES data
+
+#Background EPIC annotation (made by Maggie Fu)
+nrow(human_mouse_bg <- LUHMES_mC_human_to_mouse[LUHMES_mC_human_to_mouse$mus_external_gene %in% betaResults$gene,]) #12,576
+length(unique(human_mouse_bg$external_gene_id)) #12,364 human genes
+length(unique(human_mouse_bg$mus_external_gene)) #12,531 mouse homologs
+
+anno_sub <- anno[anno$CpG %in% LUHMES_DMPs_WT$Name & anno$Gene_name %in% human_mouse_bg$external_gene_id,]
+anno_human_mouse <- data.frame(IDs=as.character(anno_sub$Gene_name), GeneSymbols=anno_sub$Gene_name, GeneNames=anno_sub$Gene_name, GOTerms=anno_sub$GO_term)
+
+#Run ORA for biological process
+
+#hit list: genes differentially methylated in LUHMES and mice
+length(LUHMES_WT_genes_mus <- unique(LUHMES_WT_genes[LUHMES_WT_genes %in% human_mouse_bg$external_gene_id])) #3,974 covered in RRBS
+length(LUHMES_WT_genes_mus <- unique(human_mouse_bg[human_mouse_bg$mus_external_gene %in% betaResults_sub_sig$gene & human_mouse_bg$external_gene_id %in% LUHMES_WT_genes_mus,"external_gene_id"])) #44 genes
+# [1] "GRM3"     "HIF3A"    "SLC5A1"   "WWC1"     "GALNT10"  "MASP1"    "ZFP64"    "ITPR1"   
+# [9] "PTPRF"    "FAM160B1" "KIAA1217" "SLC20A2"  "PRDM16"   "NINJ2"    "BIVM"     "COL13A1" 
+#[17] "HPCAL1"   "PAK6"     "DNAH1"    "MAP7"     "MEIS1"    "MAPK4"    "LOXHD1"   "POLR2F"  
+#[25] "XKR6"     "GRHL3"    "MYO3B"    "TMEM232"  "NKAIN3"   "FAM172A"  "PTPRZ1"   "TAC3"    
+#[33] "SHROOM3"  "ADAM18"   "ADAMTS12" "CDH22"    "ARHGAP20" "CSMD1"    "LSAMP"    "TRIO"    
+#[41] "SHROOM2"  "PTGES"    "FOXK1"    "C1orf64" 
+
+#write to a table
+nrow(LUHMES_DMPs_sub <- LUHMES_DMPs_WT[LUHMES_DMPs_WT$threshold==TRUE & LUHMES_DMPs_WT$Name %in% anno[anno$Gene_name %in% LUHMES_WT_genes_mus,"CpG"],]) #127 CpGs
+anno_DMPs_sub <- anno[match(LUHMES_DMPs_sub$Name, anno$CpG),]
+all.equal(anno_DMPs_sub$CpG, LUHMES_DMPs_sub$Name) #TRUE
+LUHMES_DMPs_sub$gene <- anno_DMPs_sub$Gene_name
+
+mC_hits_human_mouse <- LUHMES_mC_human_to_mouse[LUHMES_mC_human_to_mouse$external_gene_id %in% LUHMES_WT_genes_mus,]
+mC_hits_human_mouse <- data.frame(human_gene=mC_hits_human_mouse$external_gene_id, mouse_gene=mC_hits_human_mouse$mus_external_gene)
+
+EPIC_RRBS_df <- lapply(1:nrow(mC_hits_human_mouse), function(x){
+  
+  human_gene <- mC_hits_human_mouse$human_gene[x]
+  
+  EPIC_CpGs <- LUHMES_DMPs_sub[LUHMES_DMPs_sub$gene %in% human_gene,]
+  RRBS_Cs <- betaResults_sub_sig[betaResults_sub_sig$gene %in% mC_hits_human_mouse$mouse_gene[x],]
+  diff <- nrow(EPIC_CpGs) - nrow(RRBS_Cs)
+  
+  EPIC_df <- data.frame(hg19_gene=EPIC_CpGs$gene, hg19_chr=EPIC_CpGs$chr, hg19_pos=EPIC_CpGs$pos, EPIC_CpG=EPIC_CpGs$Name, LUHMES_DB=EPIC_CpGs$DB, LUHMES_adjP=EPIC_CpGs$adj.P.Val)
+  
+  RRBS_df <- data.frame(mm10_gene=mC_hits_human_mouse$mouse_gene[x], mm10_chr=RRBS_Cs$chr, mm10_pos=RRBS_Cs$pos, mouse_DB=RRBS_Cs$meth.diff, mouse_adjP=RRBS_Cs$BH)
+  
+  if (diff>0){
+    RRBS_df <- rbind(RRBS_df, data.frame(mm10_gene=mC_hits_human_mouse$mouse_gene[x], mm10_chr=unique(RRBS_Cs$chr), mm10_pos=rep(NA,diff), mouse_DB=rep(NA,diff), mouse_adjP=rep(NA,diff)))
+  }
+  
+  else if (diff<0){
+    EPIC_df <- rbind(EPIC_df, data.frame(hg19_gene=EPIC_CpGs$gene, hg19_chr=unique(EPIC_CpGs$chr), hg19_pos=rep(NA,abs(diff)), EPIC_CpG=rep(NA,abs(diff)), LUHMES_DB=rep(NA,abs(diff)), LUHMES_adjP=rep(NA,abs(diff))))
+  }
+    
+  combined_df <- cbind(EPIC_df, RRBS_df)
+  
+  return(combined_df)
+  
+  } )
+EPIC_RRBS_df <- do.call(rbind, EPIC_RRBS_df)
+write.csv(EPIC_RRBS_df, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/WTaSyn_mC_LUHMES_mice_hits.csv", row.names=FALSE)
+
+WT_ora <- ora(annotation=anno_human_mouse, hitlist=LUHMES_WT_genes_mus, aspects="Biological Process")
+results <- WT_ora$results
+
+#subset results to those with adj pval <= 0.05
+results_sub <- results[results$CorrectedPvalue<=0.05,] #none
+
+#check how many were hits in mice (padj < 0.05 and DB > 0.05)
+nrow(betaResults_sub_sig2 <- betaResults_sub[betaResults_sub$BH<=0.05 & abs(betaResults_sub$meth.diff)>=0.05,]) #50 cytosines
+length(unique(betaResults_sub_sig2$gene)) #49 genes
+unique(betaResults_sub_sig2$gene[-which(betaResults_sub_sig2$gene %in% betaResults_sub_sig$gene)])
+# "Celf2"  "Lhx2"   "Cdca7"  "Lrrk1"  "Bcl11b"
+
+#check how many were hits in mice (padj < 0.05)
+nrow(betaResults_sub_sig3 <- betaResults_sub[betaResults_sub$BH<=0.05,]) #50 cytosines
+length(unique(betaResults_sub_sig3$gene)) #49 genes
+unique(betaResults_sub_sig3$gene[-which(betaResults_sub_sig3$gene %in% betaResults_sub_sig2$gene)])
+#none - same as above.
+
+#check how many were hits in mice (DB > 0.1)
+nrow(betaResults_sub_sig4 <- betaResults_sub[abs(betaResults_sub$meth.diff)>=0.1,]) #11,538 cytosines
+length(unique(betaResults_sub_sig4$gene)) #2,599 genes
+unique(betaResults_sub_sig4$gene[grep("Grik",betaResults_sub_sig4$gene)]) #"Grik3" "Grik4" "Grik2"
+summary(abs(betaResults[betaResults$gene%in%"Grik2",c("meth.diff","BH")]))
+#   meth.diff               BH        
+# Min.   :0.0009094   Min.   :0.7505  
+# 1st Qu.:0.0126467   1st Qu.:1.0000  
+# Median :0.0307784   Median :1.0000  
+# Mean   :0.0366977   Mean   :0.9838  
+# 3rd Qu.:0.0560625   3rd Qu.:1.0000  
+# Max.   :0.1223389   Max.   :1.0000
+
+#check how many were hits in mice (DB > 0.05)
+nrow(betaResults_sub_sig5 <- betaResults_sub[abs(betaResults_sub$meth.diff)>=0.05,]) #33,280 cytosines
+length(unique(betaResults_sub_sig5$gene)) #3,477 genes
+unique(betaResults_sub_sig5$gene[grep("Grik",betaResults_sub_sig5$gene)]) #"Grik3" "Grik4" "Grik2" "Grik1"
+```
+
+### Checking whether LUHMES/mice DNAhm genes were in SMITE modules
+```{r}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_spinglass_WT_092020.RData")
+pval_df <- LUHMES_spinglass@score_data@pval_data
+genes <- LUHMES_spinglass@score_data@genes
+rownames(pval_df) <- genes
+
+#effect_df <- LUHMES_spinglass@score_data@effect_data
+#rownames(effect_df) <- genes
+
+#getting only genes from significant modules
+modules <- LUHMES_spinglass@score_data@module_output$modules
+sig_genes <- unique(unlist(modules)) #351 genes
+pval_df_sub <- pval_df[rownames(pval_df) %in% sig_genes,]
+#effect_df_sub <- effect_df[rownames(effect_df) %in% sig_genes,]
+
+#annotating modules
+pval_df_sub$gene <- rownames(pval_df_sub)
+pval_df_sub$module <- NA
+pval_df_sub$module <- sapply(1:nrow(pval_df_sub), function(x) names(modules[grep(pval_df_sub$gene[x],modules)]))
+#some genes belong to multiple modules - fix this
+pval_df_sub$num_modules <- sapply(1:nrow(pval_df_sub), function(x) length(unlist(pval_df_sub$module[x])))
+nrow(pval_df_sub[pval_df_sub$num_modules>1,]) #119 genes belong to multiple modules
+
+nrow(mC_SMITE <- pval_df_sub[rownames(pval_df_sub) %in% LUHMES_WT_genes_mus,]) #1
+mC_SMITE
+#     methylation_promoter_pvalue methylation_body_pvalue methylation_enhancer_pvalue hydroxy_promoter_pvalue
+#WWC1                   0.9977871               0.9933116                          NA                      NA
+#     hydroxy_body_pvalue hydroxy_enhancer_pvalue expression_pvalue gene          module num_modules
+#WWC1            0.673215                      NA              0.01 WWC1 YAP1:STK3:WWTR1           1
+```
+
+
+## Compare hits: DNAhm
+
+### Comparing hits from each organism at gene-level
+```{r compare hmC, eval=F}
+anno_hmC <- anno[anno$CpG %in% LUHMES_DHMPs_WT$Name,]
+LUHMES_hmC_human_to_mouse <- LUHMES_mC_human_to_mouse[LUHMES_mC_human_to_mouse$external_gene_id %in% anno_hmC$Gene_name,]
+
+length(LUHMES_WT_genes <- unique(anno_hmC[anno_hmC$CpG %in% LUHMES_DHMPs_WT[LUHMES_DHMPs_WT$threshold==TRUE,"Name"],"Gene_name"])) #136
+
+nrow(betaResults_sub <- betaResults_WTSE_TGSE_hmC[betaResults_WTSE_TGSE_hmC$gene %in% LUHMES_hmC_human_to_mouse[LUHMES_hmC_human_to_mouse$external_gene_id %in% LUHMES_WT_genes,"mus_external_gene"],]) #287 cytosines mapping to genes differentially methylated in WT LUHMES are also covered in RRBS dataset after QC
+length(unique(betaResults_sub$gene)) #50/136 LUHMES genes
+unique(betaResults_WTSE_TGSE_hmC$gene[grep("Wdr76",betaResults_WTSE_TGSE_hmC$gene)]) #0 - not in annotation
+unique(betaResults_WTSE_TGSE_hmC$gene[grep("Grik",betaResults_WTSE_TGSE_hmC$gene)]) #"Grik2" "Grik3" "Grik5" "Grik4"
+
+#check how many were hits in mice (padj < 0.05 and DB > 0.1)
+nrow(betaResults_sub_sig <- betaResults_sub[betaResults_sub$threshold==TRUE,]) #11 cytosines
+unique(betaResults_sub_sig$gene) #9 genes
+#[1] "Ptprb"    "Slc19a1"  "Atp6v0a1" "Ddr2"     "Smyd3"    "Arl15"    "Vars"     "Rnf165"  
+#[9] "Wwox" 
+
+####pathway enrichment on these genes
+##first, create annotation for all the mouse genes also covered on the EPIC array and in the subset of probes after QC filters on LUHMES data
+
+#Background EPIC annotation (made by Maggie Fu)
+nrow(human_mouse_bg <- LUHMES_hmC_human_to_mouse[LUHMES_hmC_human_to_mouse$mus_external_gene %in% betaResults_WTSE_TGSE_hmC$gene,]) #4,830
+length(unique(human_mouse_bg$external_gene_id)) #4,802 human genes
+length(unique(human_mouse_bg$mus_external_gene)) #4,812 mouse homologs
+
+anno_sub <- anno_hmC[anno_hmC$CpG %in% LUHMES_DHMPs_WT$Name & anno_hmC$Gene_name %in% human_mouse_bg$external_gene_id,]
+anno_human_mouse_hmC <- data.frame(IDs=as.character(anno_sub$Gene_name), GeneSymbols=anno_sub$Gene_name, GeneNames=anno_sub$Gene_name, GOTerms=anno_sub$GO_term)
+
+#Run ORA for biological process
+
+#hit list: genes differentially methylated in LUHMES and mice
+length(LUHMES_WT_genes_mus <- unique(LUHMES_WT_genes[LUHMES_WT_genes %in% human_mouse_bg$external_gene_id])) #50 covered in RRBS
+length(LUHMES_WT_genes_mus <- unique(human_mouse_bg[human_mouse_bg$mus_external_gene %in% betaResults_sub_sig$gene & human_mouse_bg$external_gene_id %in% LUHMES_WT_genes_mus,"external_gene_id"])) #9 genes
+#[1] "WWOX"     "ATP6V0A1" "DDR2"     "SMYD3"    "SLC19A1"  "VARS"     "RNF165"   "ARL15"   
+#[9] "PTPRB" 
+
+#write to a table
+nrow(LUHMES_DHMPs_sub <- LUHMES_DHMPs_WT[LUHMES_DHMPs_WT$threshold==TRUE & LUHMES_DHMPs_WT$Name %in% anno_hmC[anno_hmC$Gene_name %in% LUHMES_WT_genes_mus,"CpG"],]) #9 CpGs
+anno_DHMPs_sub <- anno_hmC[match(LUHMES_DHMPs_sub$Name, anno_hmC$CpG),]
+all.equal(anno_DHMPs_sub$CpG, LUHMES_DHMPs_sub$Name) #TRUE
+LUHMES_DHMPs_sub$gene <- anno_DHMPs_sub$Gene_name
+
+hmC_hits_human_mouse <- LUHMES_hmC_human_to_mouse[LUHMES_hmC_human_to_mouse$external_gene_id %in% LUHMES_WT_genes_mus,]
+hmC_hits_human_mouse <- data.frame(human_gene=hmC_hits_human_mouse$external_gene_id, mouse_gene=hmC_hits_human_mouse$mus_external_gene)
+
+EPIC_RRBS_df <- lapply(1:nrow(hmC_hits_human_mouse), function(x){
+  
+  human_gene <- hmC_hits_human_mouse$human_gene[x]
+  
+  EPIC_CpGs <- LUHMES_DHMPs_sub[LUHMES_DHMPs_sub$gene %in% human_gene,]
+  RRBS_Cs <- betaResults_sub_sig[betaResults_sub_sig$gene %in% hmC_hits_human_mouse$mouse_gene[x],]
+  diff <- nrow(EPIC_CpGs) - nrow(RRBS_Cs)
+  
+  EPIC_df <- data.frame(hg19_gene=EPIC_CpGs$gene, hg19_chr=EPIC_CpGs$chr, hg19_pos=EPIC_CpGs$pos, EPIC_CpG=EPIC_CpGs$Name, LUHMES_DB=EPIC_CpGs$DB, LUHMES_adjP=EPIC_CpGs$adj.P.Val)
+  
+  RRBS_df <- data.frame(mm10_gene=hmC_hits_human_mouse$mouse_gene[x], mm10_chr=RRBS_Cs$chr, mm10_pos=RRBS_Cs$pos, mouse_DB=RRBS_Cs$meth.diff, mouse_adjP=RRBS_Cs$BH)
+  
+  if (diff>0){
+    RRBS_df <- rbind(RRBS_df, data.frame(mm10_gene=hmC_hits_human_mouse$mouse_gene[x], mm10_chr=unique(RRBS_Cs$chr), mm10_pos=rep(NA,diff), mouse_DB=rep(NA,diff), mouse_adjP=rep(NA,diff)))
+  }
+  
+  else if (diff<0){
+    EPIC_df <- rbind(EPIC_df, data.frame(hg19_gene=EPIC_CpGs$gene, hg19_chr=unique(EPIC_CpGs$chr), hg19_pos=rep(NA,abs(diff)), EPIC_CpG=rep(NA,abs(diff)), LUHMES_DB=rep(NA,abs(diff)), LUHMES_adjP=rep(NA,abs(diff))))
+  }
+    
+  combined_df <- cbind(EPIC_df, RRBS_df)
+  
+  return(combined_df)
+  
+  } )
+EPIC_RRBS_df <- do.call(rbind, EPIC_RRBS_df)
+write.csv(EPIC_RRBS_df, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/WTaSyn_hmC_LUHMES_mice_hits.csv", row.names=FALSE)
+
+WT_ora <- ora(annotation=anno_human_mouse_hmC, hitlist=LUHMES_WT_genes_mus, aspects="Biological Process")
+results <- WT_ora$results
+
+#subset results to those with adj pval <= 0.05
+results_sub <- results[results$CorrectedPvalue<=0.05,] #none
+
+#check how many were hits in mice (padj < 0.05 and DB > 0.05)
+nrow(betaResults_sub_sig2 <- betaResults_sub[betaResults_sub$BH<=0.05 & abs(betaResults_sub$meth.diff)>=0.05,]) #11 cytosines
+length(unique(betaResults_sub_sig2$gene)) #9 genes
+unique(betaResults_sub_sig2$gene[-which(betaResults_sub_sig2$gene %in% betaResults_sub_sig$gene)])
+#none - same as above.
+
+#check how many were hits in mice (padj < 0.05)
+nrow(betaResults_sub_sig3 <- betaResults_sub[betaResults_sub$BH<=0.05,]) #11 cytosines
+length(unique(betaResults_sub_sig3$gene)) #9 genes
+unique(betaResults_sub_sig3$gene[-which(betaResults_sub_sig3$gene %in% betaResults_sub_sig2$gene)])
+#none - same as above.
+
+#check how many were hits in mice (DB > 0.1)
+nrow(betaResults_sub_sig4 <- betaResults_sub[abs(betaResults_sub$meth.diff)>=0.1,]) #119 cytosines
+length(unique(betaResults_sub_sig4$gene)) #38 genes
+unique(betaResults_sub_sig4$gene)
+# [1] "Ptprb"         "Slc19a1"       "Zc3h12d"       "Rfx4"          "Atp6v0a1"     
+# [6] "Tbc1d16"       "Rptor"         "Ddr2"          "Smyd3"         "Disp1"        
+#[11] "Igf2bp1"       "Prima1"        "Arl15"         "Parp8"         "Tbc1d4"       
+#[16] "Pcca"          "Trio"          "Abat"          "Vars"          "Speg"         
+#[21] "Epb4.1l4a"     "Rnf165"        "Tjp2"          "Lcor"          "Fbln7"        
+#[26] "Nek6"          "Pde7a"         "Chd7"          "3110082I17Rik" "Foxk1"        
+#[31] "Agap3"         "Ablim2"        "Vgll4"         "Foxp1"         "Tnrc6a"       
+#[36] "Igf1r"         "Wwox"          "Pard3" 
+
+unique(betaResults_sub_sig4$gene[grep("Grik",betaResults_sub_sig4$gene)]) #not there
+betaResults_WTSE_TGSE_hmC[betaResults_WTSE_TGSE_hmC$gene%in%"Grik2",c("meth.diff","BH")]
+#        meth.diff        BH
+#1.1160 0.03449409 0.9072779
+
+#check how many were hits in mice (DB > 0.05)
+nrow(betaResults_sub_sig5 <- betaResults_sub[abs(betaResults_sub$meth.diff)>=0.05,]) #187 cytosines
+length(unique(betaResults_sub_sig5$gene)) #42 genes
+unique(betaResults_sub_sig5$gene[grep("Grik",betaResults_sub_sig5$gene)]) #none
+```
+
+### Checking whether LUHMES/mice DNAhm genes were in SMITE modules
+```{r}
+nrow(hmC_SMITE <- pval_df_sub[rownames(pval_df_sub) %in% LUHMES_WT_genes_mus,]) #1
+hmC_SMITE
+#     methylation_promoter_pvalue methylation_body_pvalue methylation_enhancer_pvalue
+#WWOX                   0.9994895               0.9968232                          NA
+#     hydroxy_promoter_pvalue hydroxy_body_pvalue hydroxy_enhancer_pvalue expression_pvalue gene
+#WWOX               0.9993982           0.9988544                      NA              0.75 WWOX
+#                       module num_modules
+#WWOX NOTCH2:NOTCH3, DLL1:DLL4           2
+```
+

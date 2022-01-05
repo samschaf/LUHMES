@@ -1,0 +1,867 @@
+DecipherPD LUHMES EPIC Array Runs - Differential Methylation Analysis
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: June 18, 2020
+
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+#Load packages
+```{r libraries, results='hide', eval=F}
+setwd("~/")
+library(wateRmelon)
+library(Sushi)
+library(IlluminaHumanMethylation450k.db)
+library(lumi)
+library(ggfortify) #For plotting
+library(gridExtra) #For plotting
+library(plotly) #For plotting
+library(GEOquery) #For downloading genetic data
+library(wateRmelon) #For model/analyses
+library(limma) #For model/analyses
+library(minfi) #For model/analyses
+library(IlluminaHumanMethylationEPICanno.ilmn10b2.hg19) #Gene annotation for analyses
+library(IlluminaHumanMethylationEPICmanifest)
+library(RColorBrewer) #Colors for plotting
+library(missMethyl)  #For model/analyses
+library(matrixStats) #For data manipulation
+library(minfiData) #For model/analyses
+library(Gviz) #For DMR plotting
+library(DMRcate) #For DMR model/analyses
+library(gplots) #For plotting
+library(ggplot2) #For plotting
+library(stringr) #For data manipulation
+library(tidyverse) #For data manipulation
+library(data.table) #For data manipulation
+library(colorspace) #Colors for plotting
+library(VennDiagram) #Necessary for the overlap counts/venn diagram
+library(qpcR) #Necessary for the overlap counts/venn diagram
+library(methylumi)
+library(parallel)
+library(dplyr)
+library(gtools)
+library(moments)
+library(normtest)
+```
+
+#Load in EPIC annotation and methylumi object
+```{r EPIC anno, eval=F}
+#Assigning annotation information for CpG probes on the EPIC array
+annEPIC <- read.csv("~/KoborLab/kobor_space/shared_coding_resource/Illumina_EPIC/EPIC_KH_Annotation.csv")
+
+#Load data and meta files
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_hmC_clean_SS_06182020.RData")
+meta <- pData(mC_methylumi_N)
+```
+
+#Linear model for differential DNAhm
+I will use genotype as the only covariate in this analysis since this is a cell line, and the only other confounding factors (passage/collection date) have already been regressed out during batch correction.
+```{r linear model, eval=F}
+#Ensure covariate is a factor
+str(meta)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Genotype <- relevel(meta$Genotype, ref="GFP")
+# create the design for the model
+design <- model.matrix(~meta$Genotype)
+
+#fix negative hmC betas
+hmC_betas_matrix_N[hmC_betas_matrix_N<0] <- 0
+# fit the linear model to M-values
+Mvals <- beta2m(hmC_betas_matrix_N)
+fit <- lmFit(Mvals, design)
+
+# fit the contrasts
+fit2 <- eBayes(fit)
+
+# look at the numbers of DM CpGs at FDR < 0.05
+summary(decideTests(fit2))
+#hundreds of probes significant for A30P, thousands for WT
+
+# get the table of results for the first contrast (A30P)
+annEPICsub <- annEPIC[match(rownames(Mvals),annEPIC$Name),
+c(1:4,12:19,24:ncol(annEPIC))]
+A30P_DHMPs <- topTable(fit2, num=Inf, coef=2, genelist=annEPICsub)
+WT_DHMPs <- topTable(fit2, num=Inf, coef=3, genelist=annEPICsub)
+
+#A30P delbetas
+meta$Sample_Label <- gsub("ox", "BS", meta$Sample_Label)
+head(meta$Sample_Label)
+
+LUHMES_hmC_betas <- as.data.frame(hmC_betas_matrix_N)
+colnames(LUHMES_hmC_betas) <- gsub("_", ".", colnames(LUHMES_hmC_betas))
+colnames(LUHMES_hmC_betas) <- gsub(" ", "", colnames(LUHMES_hmC_betas))
+head(colnames(LUHMES_hmC_betas))
+
+hmC_A30P <- LUHMES_hmC_betas[,grep("A30P", colnames(LUHMES_hmC_betas))]
+hmC_GFP <- LUHMES_hmC_betas[,grep("GFP", colnames(LUHMES_hmC_betas))]
+delbeta_hmC_A30P <- rowMeans(hmC_A30P) - rowMeans(hmC_GFP)
+
+#WT delbetas
+hmC_WT <- LUHMES_hmC_betas[,grep("WT", colnames(LUHMES_hmC_betas))]
+#hmC_GFP <- LUHMES_hmC_betas[,GFP_IDs]
+delbeta_hmC_WT <- rowMeans(hmC_WT) - rowMeans(hmC_GFP)
+```
+
+# Volcano plot for A30P
+```{r volcano A30P, eval=F}
+#Add DBs to topTable result
+A30P_hmC_gene_list <- A30P_DHMPs
+A30P_hmC_gene_list <- A30P_hmC_gene_list %>% arrange(Name)
+delbeta_df <- data.frame(names(delbeta_hmC_A30P), delbeta_hmC_A30P)
+colnames(delbeta_df) <- c("Name", "DB")
+delbeta_df <- delbeta_df %>% arrange(Name)
+all.equal(as.character(delbeta_df$Name), as.character(A30P_hmC_gene_list$Name))
+A30P_hmC_gene_list$DB <- delbeta_df$DB
+A30P_hmC_gene_list$threshold <- (abs(A30P_hmC_gene_list$DB) >= 0.05 & A30P_hmC_gene_list$adj.P.Val <= 0.05)
+summary(A30P_hmC_gene_list$threshold) #69 hits
+
+A30P_hmC_gene_list <- A30P_hmC_gene_list %>% arrange(desc(abs(DB)))
+write.csv(A30P_hmC_gene_list, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+
+#D'Agostino's test for skeweness on delta betas
+#sample size must be between 8 and 46340 - randomly sample the max number
+A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+agostino.test(sample(A30P_gene_list$DB, 46340))
+#	D'Agostino skewness test
+#
+#data:  sample(A30P_gene_list$DB, 46340)
+#skew = 0.064794, z = 5.689255, p-value = 1.276e-08
+#alternative hypothesis: data have a skewness
+
+#Shapiro-wilk test for skewness (similar to D'Agostino)
+skewness.norm.test(A30P_gene_list$DB, nrepl=1000)
+#	Skewness test for normality
+#
+#data:  A30P_gene_list$DB
+#T = 0.087836, p-value < 2.2e-16
+
+##Construct the volcano plot
+A30P_hmC_gene_list$DNAm_change <- A30P_hmC_gene_list$threshold
+A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==TRUE & A30P_hmC_gene_list$DB>0,]$DNAm_change <- "Increase"
+A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==TRUE & A30P_hmC_gene_list$DB<0,]$DNAm_change <- "Decrease"
+A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==FALSE,]$DNAm_change <- "NS"
+summary(as.factor(A30P_hmC_gene_list$DNAm_change)) #2 with dcr hmc, 67 with incr hmc
+
+ggplot(data=A30P_hmC_gene_list, aes(x=DB, y=-log10(adj.P.Val), colour=DNAm_change)) +
+  geom_point(alpha=0.4, size=1.75) +
+  labs(legend.position = "none") +
+  xlab("Delta Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("red", "blue","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,6)) + xlim(c(-0.2,0.2))
+
+#colour by hits unique to each group vs shared
+A30P_hmC_gene_list$Category <- rep("None", nrow(A30P_hmC_gene_list))
+A30P_hmC_gene_list[A30P_hmC_gene_list$Name %in% A30P_hmC_top20$Name,"Category"] <- "A30P aSyn unique"
+A30P_hmC_gene_list[A30P_hmC_gene_list$Name %in% WT_hmC_top20$Name,"Category"] <- "WT aSyn unique"
+A30P_hmC_gene_list[A30P_hmC_gene_list$Name %in% shared_hmC_top20$Name,"Category"] <- "WT and A30P aSyn"
+A30P_hmC_gene_list$Category <- factor(A30P_hmC_gene_list$Category, levels=A30P_hmC_gene_list$Category)
+A30P_hmC_gene_list$Category <- reorder.factor(A30P_hmC_gene_list$Category, new.order=c("WT aSyn unique", "A30P aSyn unique", "WT and A30P aSyn", "None"))
+
+ggplot(data=A30P_hmC_gene_list, aes(x=DB, y=-log10(adj.P.Val), colour=Category, alpha=Category)) +
+  geom_point(size=1.75) + scale_alpha_manual(values=c(1,1,1,0.05)) +
+  labs(legend.position = "none") +
+  xlab("Delta Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("orange","purple","black","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,6))
+```
+![Volcano plot for A30P DHMPs](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_hmC_A30P_06182020.png)
+
+![Volcano plot for A30P DHMPs, by category](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_A30P_hmC_category.png)
+
+# Volcano plot for WT
+```{r volcano WT, eval=F}
+#Add DBs to topTable result
+WT_hmC_gene_list <- WT_DHMPs
+WT_hmC_gene_list <- WT_hmC_gene_list %>% arrange(Name)
+delbeta_df_WT <- data.frame(names(delbeta_hmC_WT), delbeta_hmC_WT)
+colnames(delbeta_df_WT) <- c("Name", "DB")
+delbeta_df_WT <- delbeta_df_WT %>% arrange(Name)
+all.equal(as.character(delbeta_df_WT$Name), as.character(WT_hmC_gene_list$Name))
+WT_hmC_gene_list$DB <- delbeta_df_WT$DB
+WT_hmC_gene_list$threshold <- (abs(WT_hmC_gene_list$DB) >= 0.05 & WT_hmC_gene_list$adj.P.Val <= 0.05)
+summary(WT_hmC_gene_list$threshold) #215 hits
+
+WT_hmC_gene_list <- WT_hmC_gene_list %>% arrange(desc(abs(DB)))
+write.csv(WT_hmC_gene_list, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+
+#D'Agostino's test for skeweness on delta betas
+#sample size must be between 8 and 46340 - randomly sample the max number
+WT_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+agostino.test(sample(WT_gene_list$DB, 46340))
+#	D'Agostino skewness test
+#
+#data:  sample(WT_gene_list$DB, 46340)
+#skew = -0.36605, z = -31.18436, p-value < 2.2e-16
+#alternative hypothesis: data have a skewness
+
+#Shapiro-wilk test for skewness (similar to D'Agostino)
+skewness.norm.test(WT_gene_list$DB, nrepl=1000)
+#	Skewness test for normality
+#
+#data:  WT_gene_list$DB
+#T = -0.34096, p-value < 2.2e-16
+
+##Construct the volcano plot
+WT_hmC_gene_list$DNAm_change <- WT_hmC_gene_list$threshold
+WT_hmC_gene_list[WT_hmC_gene_list$threshold==TRUE & WT_hmC_gene_list$DB>0,]$DNAm_change <- "Increase"
+WT_hmC_gene_list[WT_hmC_gene_list$threshold==TRUE & WT_hmC_gene_list$DB<0,]$DNAm_change <- "Decrease"
+WT_hmC_gene_list[WT_hmC_gene_list$threshold==FALSE,]$DNAm_change <- "NS"
+summary(as.factor(WT_hmC_gene_list$DNAm_change)) #97 with dcr DNAhm, 118 with incr DNAhm
+
+ggplot(data=WT_hmC_gene_list, aes(x=DB, y=-log10(adj.P.Val), colour=DNAm_change)) +
+  geom_point(alpha=0.4, size=1.75) +
+  labs(legend.position = "none") +
+  xlab("Delta Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("red", "blue","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,6)) + xlim(c(-0.2,0.2))
+
+#colour by hits unique to each group vs shared
+WT_hmC_gene_list$Category <- rep("None", nrow(WT_hmC_gene_list))
+WT_hmC_gene_list[WT_hmC_gene_list$Name %in% A30P_hmC_top20$Name,"Category"] <- "A30P aSyn unique"
+WT_hmC_gene_list[WT_hmC_gene_list$Name %in% WT_hmC_top20$Name,"Category"] <- "WT aSyn unique"
+WT_hmC_gene_list[WT_hmC_gene_list$Name %in% shared_hmC_top20$Name,"Category"] <- "WT and A30P aSyn"
+WT_hmC_gene_list$Category <- factor(WT_hmC_gene_list$Category, levels=WT_hmC_gene_list$Category)
+WT_hmC_gene_list$Category <- reorder.factor(WT_hmC_gene_list$Category, new.order=c("WT aSyn unique", "A30P aSyn unique", "WT and A30P aSyn", "None"))
+
+ggplot(data=WT_hmC_gene_list, aes(x=DB, y=-log10(adj.P.Val), colour=Category, alpha=Category)) +
+  geom_point(size=1.75) + scale_alpha_manual(values=c(1,1,1,0.05)) +
+  labs(legend.position = "none") +
+  xlab("Delta Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("orange","purple","black","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,6))
+```
+![Volcano plot for WT DHMPs](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_hmC_WT_06182020.png)
+
+![Volcano plot for WT DHMPs, by category](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_WT_hmC_category.png)
+
+##Permutation testing code for genomic enrichment
+From Rachel Edgar.
+```{r perm, eval=F}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/master_anno_en.RData")
+Gene_CpG_Relations_update <- master_anno_en
+colnames(Gene_CpG_Relations_update) <- c("Probe_ID","region")
+#subset to hmC probes
+Gene_CpG_Relations_update <- Gene_CpG_Relations_update[Gene_CpG_Relations_update$Probe_ID %in% WT_gene_list$Name,]
+
+annEPIC <- read.csv("~/KoborLab/kobor_space/shared_coding_resource/Illumina_EPIC/EPIC_KH_Annotation.csv", row.names = 1)
+annEPIC <- annEPIC[annEPIC$Name %in% WT_gene_list$Name,]
+
+##### Permutation P value and fold change plot
+source("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/CGI_Gene_permutation_enrichment_enhancer.R")
+
+#WT
+CpG_list <- WT_gene_list[WT_gene_list$threshold==TRUE,]$Name
+background.probes <- WT_gene_list$Name
+permutation_number=1000
+plotmin=-5
+plotmax=5
+
+CGI_Gene_permutation_enrichment(CpG_list, background.probes, permutation_number, plotmin, plotmax)
+#[1] "Enrichment: 0.666; Depletion 1; Feature: "
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 0.018; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 0.081; Feature: Enhancer"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS200"
+#[1] "Enrichment: 1; Depletion 0; Feature: 1stExon"
+
+#Previous result
+#[1] "FDR Adjusted Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS200"
+#[1] "Enrichment: 1; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 1; Feature: 1stExon"
+#[1] "Enrichment: 1; Depletion 0.328; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 1; Feature: "
+#[1] "Enrichment: 0.03; Depletion: 1; Feature: Island"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shelf"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shore"
+#[1] "Enrichment: 1; Depletion: 1; Feature: OpenSea"
+#[1] "Enrichment: 1; Depletion: 0.696; Feature: S_Shelf"
+#[1] "Enrichment: 1; Depletion: 1; Feature: S_Shore"
+
+
+#A30P
+CpG_list <- A30P_gene_list[A30P_gene_list$threshold==TRUE,]$Name
+background.probes <- A30P_gene_list$Name
+permutation_number=1000
+plotmin=-5
+plotmax=5
+
+CGI_Gene_permutation_enrichment(CpG_list, background.probes, permutation_number, plotmin, plotmax)
+#[1] "Enrichment: 1; Depletion 1; Feature: "
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 1; Feature: Enhancer"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS200"
+#[1] "Enrichment: 1; Depletion 0; Feature: 1stExon"
+
+#Previous result
+#[1] "FDR Adjusted Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS200"
+#[1] "Enrichment: 1; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 1; Feature: 1stExon"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 1; Feature: "
+#[1] "Enrichment: 1; Depletion: 1; Feature: Island"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shelf"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shore"
+#[1] "Enrichment: 1; Depletion: 1; Feature: OpenSea"
+#[1] "Enrichment: 1; Depletion: 0.27; Feature: S_Shelf"
+#[1] "Enrichment: 1; Depletion: 1; Feature: S_Shore"
+
+#WT shared mC/hmC sites
+WT_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+
+WT_mC_hits <- WT_gene_list[WT_gene_list$threshold==TRUE,"Name"]
+WT_hmC_hits <- WT_hmC_gene_list[WT_hmC_gene_list$threshold==TRUE,"Name"]
+WT_mC_hmC_hits <- WT_mC_hits[WT_mC_hits %in% WT_hmC_hits]
+
+background.probes <- WT_hmC_gene_list$Name
+permutation_number=1000
+plotmin=-5
+plotmax=5
+
+CGI_Gene_permutation_enrichment(WT_mC_hmC_hits, background.probes, permutation_number, plotmin, plotmax)
+#[1] "FDR Adjusted Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 0.328; Depletion 1; Feature: TSS200"
+#[1] "Enrichment: 1; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 1; Feature: 1stExon"
+#[1] "Enrichment: 1; Depletion 0.256; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 1; Feature: "
+#[1] "Enrichment: 0.054; Depletion: 1; Feature: Island"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shelf"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shore"
+#[1] "Enrichment: 1; Depletion: 1; Feature: OpenSea"
+#[1] "Enrichment: 1; Depletion: 1; Feature: S_Shelf"
+#[1] "Enrichment: 1; Depletion: 0.984; Feature: S_Shore"
+
+
+#A30P shared mC/hmC sites
+A30P_gene_list <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+
+A30P_mC_hits <- A30P_gene_list[A30P_gene_list$threshold==TRUE,"Name"]
+A30P_hmC_hits <- A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==TRUE,"Name"]
+A30P_mC_hmC_hits <- A30P_mC_hits[A30P_mC_hits %in% A30P_hmC_hits]
+
+CGI_Gene_permutation_enrichment(A30P_mC_hmC_hits, background.probes, permutation_number, plotmin, plotmax)
+#[1] "FDR Adjusted Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS200"
+#[1] "Enrichment: 1; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 1; Feature: 1stExon"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 1; Feature: "
+#[1] "Enrichment: 1; Depletion: 1; Feature: Island"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shelf"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shore"
+#[1] "Enrichment: 0.006; Depletion: 1; Feature: OpenSea"
+#[1] "Enrichment: 1; Depletion: 1; Feature: S_Shelf"
+#[1] "Enrichment: 1; Depletion: 0.234; Feature: S_Shore"
+```
+
+#Calculating genomic context enrichment, WT
+
+```{r genomic enrichment WT, eval=F}
+#Plot fold change across genomic contexts
+
+#background
+locations_EPIC <- Gene_CpG_Relations_update$region
+summary <- summary(as.factor(locations_EPIC))
+summary
+#          1stExon    3'UTR    5'UTR     Body Enhancer  ExonBnd  TSS1500   TSS200 
+#   48829      918     4488    14498    71925    73307     1377    14023     4075 
+locations_EPIC <- data.frame(EPIC_count=summary)
+rownames(locations_EPIC) <- c("Intergenic", "1stExon", "UTR3", "UTR5", "Body", "Enhancer", "ExonBnd", "TSS1500", "TSS200")
+
+#calculating the proportion of overall sites in each category (will use this number to normalize hits to the background)
+locations_EPIC$EPIC_fraction <- as.vector(apply(locations_EPIC, 2, function(x) x/sum(locations_EPIC$EPIC_count)))
+
+#getting the number of hits in each genomic context for WT
+locations <- Gene_CpG_Relations_update[Gene_CpG_Relations_update$Probe_ID %in% WT_gene_list[WT_gene_list$threshold==TRUE,"Name"],"region"]
+loc_summary <- summary(as.factor(locations))
+loc_summary
+#            3'UTR    5'UTR     Body Enhancer  ExonBnd  TSS1500   TSS200 
+#      54        5       15       86       38        1        9        7 
+loc_summary <- c(loc_summary, `1stExon`=0.1)
+loc_summary <- loc_summary[c(1,9,2:8)]
+length(locations) #215
+
+#add to dataframe
+locations_EPIC$real_count <- loc_summary
+locations_EPIC$real_fraction <- sapply(1:length(locations_EPIC$real_count), function(x) locations_EPIC$real_count[x]/sum(locations_EPIC$real_count))
+
+#caluclate fold change
+locations_EPIC$fold_change <- sapply(1:nrow(locations_EPIC), function(x) foldchange(locations_EPIC$real_fraction[x], locations_EPIC$EPIC_fraction[x]))
+
+locations_norm_WT <- locations_EPIC
+locations_norm_WT$Name <- rownames(locations_EPIC)
+locations_norm_WT$Name <- reorder.factor(locations_norm_WT$Name, new.order=c("Enhancer","TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+locations_norm_WT$Genotype <- "WT aSyn"
+```
+
+#Calculating enrichment of hits by CGI context, WT
+```{r CGI enrichment WT, eval=F}
+#calculating background numbers/normalization factor
+CGI_EPIC <- WT_hmC_gene_list$Relation_to_Island
+summary <- summary(as.factor(CGI_EPIC))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#  15614   10420   22588  155516    9799   19503 
+CGI_EPIC <- data.frame(EPIC_count=summary)
+rownames(CGI_EPIC) <- c("Island", "N_Shelf", "N_Shore", "OpenSea","S_Shelf", "S_Shore")
+CGI_EPIC$EPIC_fraction <- as.vector(apply(CGI_EPIC, 2, function(x) x/sum(CGI_EPIC$EPIC_count)))
+
+#enrichment of hits in WT
+CGI <- WT_hmC_gene_list[WT_hmC_gene_list$threshold==TRUE,]$Relation_to_Island
+CGI_summary <- summary(as.factor(CGI))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#     26       7      17     146       5      14 
+length(CGI) #215
+
+CGI_EPIC$real_count <- CGI_summary
+CGI_EPIC$real_fraction <- sapply(1:length(CGI_EPIC$real_count), function(x) CGI_EPIC$real_count[x]/sum(CGI_EPIC$real_count))
+
+#caluclate fold change
+CGI_EPIC$fold_change <- sapply(1:nrow(CGI_EPIC), function(x) foldchange(CGI_EPIC$real_fraction[x], CGI_EPIC$EPIC_fraction[x]))
+
+WT_CGI_norm <- CGI_EPIC
+WT_CGI_norm$Name <- rownames(CGI_EPIC)
+WT_CGI_norm$Name <- reorder.factor(WT_CGI_norm$Name, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+WT_CGI_norm$Genotype <- "SNCA-OE"
+```
+
+#Plotting genomic context enrichment, A30P
+```{r genomic enrichment A30P, eval=F}
+#enrichment of A30P hits
+
+locations <- Gene_CpG_Relations_update[Gene_CpG_Relations_update$Probe_ID %in% A30P_gene_list[A30P_gene_list$threshold==TRUE,"Name"],"region"]
+loc_summary <- summary(as.factor(locations))
+loc_summary
+#            3'UTR    5'UTR     Body Enhancer  TSS1500   TSS200 
+#      17        2        6       21       19        2        2 
+loc_summary <- c(loc_summary, `1stExon`=0.1, ExonBnd=0.1)
+loc_summary <- loc_summary[c(1,8,2:5,9,6:7)]
+
+#add to dataframe
+locations_EPIC$real_count <- loc_summary
+locations_EPIC$real_fraction <- sapply(1:length(locations_EPIC$real_count), function(x) locations_EPIC$real_count[x]/sum(locations_EPIC$real_count))
+
+#caluclate fold change
+locations_EPIC$fold_change <- sapply(1:nrow(locations_EPIC), function(x) foldchange(locations_EPIC$real_fraction[x], locations_EPIC$EPIC_fraction[x]))
+
+locations_norm_A30P <- locations_EPIC
+locations_norm_A30P$Name <- rownames(locations_EPIC)
+locations_norm_A30P$Name <- reorder.factor(locations_norm_A30P$Name, new.order=c("Enhancer","TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+locations_norm_A30P$Genotype <- "A30P aSyn"
+```
+
+#Plotting genomic context enrichment in both genotypes
+```{r plot genomic enrichment, eval=F}
+locations_norm <- rbind(locations_norm_WT, locations_norm_A30P)
+locations_norm$Genotype <- factor(locations_norm$Genotype)
+locations_norm$Genotype <- relevel(locations_norm$Genotype, ref="WT aSyn")
+
+#add significance from permutation
+
+#WT
+#body *, 1stexon ***
+
+#A30P
+#1stexon ***
+
+locations_norm$sig <- as.factor(c("","***",rep("",2),"*",rep("",5),"***",rep("",7)))
+
+summary(locations_norm$fold_change)
+#    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+#-8.45878 -1.69210  0.05377 -0.64211  1.27550  1.86425 
+    
+ggplot(locations_norm, aes(x=Name, y=fold_change, fill=Genotype)) + geom_bar(stat="identity", position="dodge") + theme_bw() + ylab("Fold Change over Array Background") + xlab("Genomic Context") + scale_fill_manual(values=c("gray75", "gray48"), name="Comparison", labels=c("Control vs. WT aSyn", "Control vs. A30P aSyn")) + geom_hline(yintercept=0) + ylim(c(-9,2)) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12))  + 
+   geom_text(data = subset(locations_norm, fold_change >= 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 0, size=4) +
+    geom_text(data = subset(locations_norm, fold_change < 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 1.5, size=4)
+```
+![Genomic context fold enrichment for both genotypes](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/genomic_context_hmC_082020.png)
+
+#Plotting CGI enrichment in both genotypes
+```{r plot CGI enrichment, eval=F}
+CGI <- unlist(strsplit(as.character(A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==TRUE,]$Relation_to_Island), split=";"))
+CGI_summary <- summary(as.factor(CGI))
+#Island N_Shelf N_Shore OpenSea S_Shore 
+#      6       1       6      50       6 
+length(CGI) #69
+
+CGI_summary <- c(CGI_summary, 0)
+names(CGI_summary)[6] <- "S_Shelf"
+CGI_EPIC$real_count <- CGI_summary
+CGI_EPIC$real_fraction <- sapply(1:length(CGI_EPIC$real_count), function(x) CGI_EPIC$real_count[x]/sum(CGI_EPIC$real_count))
+
+#caluclate fold change
+CGI_EPIC$fold_change <- sapply(1:nrow(CGI_EPIC), function(x) foldchange(CGI_EPIC$real_fraction[x], CGI_EPIC$EPIC_fraction[x]))
+
+A30P_CGI_norm <- CGI_EPIC
+A30P_CGI_norm$Name <- rownames(CGI_EPIC)
+A30P_CGI_norm$Name <- reorder.factor(A30P_CGI_norm$Name, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+A30P_CGI_norm$Genotype <- "A30P"
+
+CGI_norm <- rbind(WT_CGI_norm, A30P_CGI_norm)
+CGI_norm$Genotype <- factor(CGI_norm$Genotype)
+CGI_norm$Genotype <- relevel(CGI_norm$Genotype, ref="SNCA-OE")
+
+#add significance from permutation
+CGI_norm$sig <- c("*",rep("", nrow(CGI_norm)-1))
+
+#if there were no hits in a category, fold change comes out as Inf - replace this with 0
+CGI_norm$fold_change[abs(CGI_norm$fold_change)==Inf] <- 0
+summary(CGI_norm$fold_change)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#-3.0799 -1.3050 -0.5564 -0.2157  1.1408  2.0716 
+
+ggplot(CGI_norm, aes(x=Name, y=fold_change, fill=Genotype)) + geom_bar(stat="identity", position="dodge") + theme_bw() + ylab("Fold Change over Array Background") + xlab("Relation to CpG Island") + scale_fill_manual(values=c("gray75", "gray48"), name="Comparison", labels=c("Control vs. SNCA-OE", "Control vs. A30P")) + geom_hline(yintercept=0) + ylim(c(-4,3)) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12))  + 
+   geom_text(data = subset(CGI_norm, fold_change >= 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 0, size=4) +
+    geom_text(data = subset(CGI_norm, fold_change < 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 1.5, size=4)
+```
+![CpG island context](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CGI_hmC.png)
+
+
+##Plotting genomic context enrichment - detailed
+Including direction of DNAhm change and whether each hit is unique to one genotype or shared between genotypes.
+```{r plot genomic enrichment detailed, eval=F}
+#need to make a data frame with four categories (increased DNAm shared/unique, decreased DNAm shared/unique) and the number of probes in each category
+
+#add genomic context annotation to DMPs data frames
+#make cpg site columns into character format (so that factor levels don't interfere with arranging) and then order the dataframes to match up the columns
+WT_hmC_gene_list$Name <- as.character(WT_hmC_gene_list$Name)
+WT_hmC_gene_list <- WT_hmC_gene_list %>% arrange(Name)
+A30P_hmC_gene_list$Name <- as.character(A30P_hmC_gene_list$Name)
+A30P_hmC_gene_list <- A30P_hmC_gene_list %>% arrange(Name)
+Gene_CpG_Relations_update$Probe_ID <- as.character(Gene_CpG_Relations_update$Probe_ID)
+Gene_CpG_Relations_update <- Gene_CpG_Relations_update %>% arrange(Probe_ID)
+all.equal(Gene_CpG_Relations_update$Probe_ID, WT_hmC_gene_list$Name, A30P_hmC_gene_list$Name) #TRUE
+WT_hmC_gene_list$group <- Gene_CpG_Relations_update$region
+A30P_hmC_gene_list$group <- Gene_CpG_Relations_update$region
+
+WT_hmC_gene_list$overlap <- (WT_hmC_gene_list$threshold==TRUE & A30P_hmC_gene_list$threshold==TRUE)
+WT_hmC_gene_list$DNAm_change <- rep(NA,nrow(WT_hmC_gene_list))
+WT_hmC_gene_list[WT_hmC_gene_list$DB>0 & WT_hmC_gene_list$threshold==TRUE,"DNAm_change"] <- "Increase"
+WT_hmC_gene_list[WT_hmC_gene_list$DB<0 & WT_hmC_gene_list$threshold==TRUE,"DNAm_change"] <- "Decrease"
+WT_hmC_gene_list[WT_hmC_gene_list$threshold==FALSE,"DNAm_change"] <- "NS"
+
+A30P_hmC_gene_list$overlap <- (A30P_hmC_gene_list$threshold==TRUE & WT_hmC_gene_list$threshold==TRUE)
+A30P_hmC_gene_list$DNAm_change <- rep(NA,nrow(A30P_hmC_gene_list))
+A30P_hmC_gene_list[A30P_hmC_gene_list$DB>0 & A30P_hmC_gene_list$threshold==TRUE,"DNAm_change"] <- "Increase"
+A30P_hmC_gene_list[A30P_hmC_gene_list$DB<0 & A30P_hmC_gene_list$threshold==TRUE,"DNAm_change"] <- "Decrease"
+A30P_hmC_gene_list[A30P_hmC_gene_list$threshold==FALSE,"DNAm_change"] <- "NS"
+
+###ctrl vs WT
+genomic_detail_WT <- melt(data.frame(
+
+    WT_incr_inter_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="",]), WT_incr_inter_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="",]), WT_dcr_inter_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="",]), WT_dcr_inter_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="",]), 
+  
+  WT_incr_TSS1500_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="TSS1500",]), WT_incr_TSS1500_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="TSS1500",]), WT_dcr_TSS1500_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="TSS1500",]), WT_dcr_TSS1500_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="TSS1500",]), 
+  
+                                  WT_incr_TSS200_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="TSS200",]), WT_incr_TSS200_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="TSS200",]), WT_dcr_TSS200_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="TSS200",]), WT_dcr_TSS200_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="TSS200",]), 
+                            
+
+                                  WT_incr_UTR5_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="5'UTR",]), WT_incr_UTR5_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="5'UTR",]), WT_dcr_UTR5_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="5'UTR",]), WT_dcr_UTR5_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="5'UTR",]), 
+  
+    WT_incr_1stExon_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="1stExon",]), WT_incr_1stExon_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="1stExon",]), WT_dcr_1stExon_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="1stExon",]), WT_dcr_1stExon_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="1stExon",]), 
+  
+  WT_incr_Body_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="Body",]), WT_incr_Body_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="Body",]), WT_dcr_Body_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="Body",]), WT_dcr_Body_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="Body",]),   
+
+  WT_incr_ExonBnd_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="ExonBnd",]), WT_incr_ExonBnd_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="ExonBnd",]), WT_dcr_ExonBnd_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="ExonBnd",]), WT_dcr_ExonBnd_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="ExonBnd",]),   
+  
+                                    WT_incr_UTR3_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="3'UTR",]), WT_incr_UTR3_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$group=="3'UTR",]), WT_dcr_UTR3_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="3'UTR",]), WT_dcr_UTR3_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$group=="3'UTR",])))
+
+genomic_detail_WT$group <- c(rep("Intergenic",4), rep("TSS1500",4), rep("TSS200", 4), rep("UTR5",4), rep("1stExon",4), rep("Body",4), rep("ExonBnd",4), rep("UTR3",4))
+genomic_detail_WT$type <- rep(c("shared","unique"),16)
+genomic_detail_WT$direction <- rep(c("Increase", "Increase", "Decrease", "Decrease"),8)
+genomic_detail_WT$Category <- paste(genomic_detail_WT$direction, genomic_detail_WT$type, sep="_")
+genomic_detail_WT$group <- as.factor(genomic_detail_WT$group)
+genomic_detail_WT$group <- reorder.factor(genomic_detail_WT$group, new.order=c("TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+
+###ctrl vs A30P
+genomic_detail_A30P <- melt(data.frame(
+
+    A30P_incr_inter_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="",]), A30P_incr_inter_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="",]), A30P_dcr_inter_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="",]), A30P_dcr_inter_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="",]), 
+  
+  A30P_incr_TSS1500_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="TSS1500",]), A30P_incr_TSS1500_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="TSS1500",]), A30P_dcr_TSS1500_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="TSS1500",]), A30P_dcr_TSS1500_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="TSS1500",]), 
+  
+                                  A30P_incr_TSS200_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="TSS200",]), A30P_incr_TSS200_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="TSS200",]), A30P_dcr_TSS200_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="TSS200",]), A30P_dcr_TSS200_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="TSS200",]), 
+                            
+
+                                  A30P_incr_UTR5_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="5'UTR",]), A30P_incr_UTR5_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="5'UTR",]), A30P_dcr_UTR5_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="5'UTR",]), A30P_dcr_UTR5_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="5'UTR",]), 
+  
+    A30P_incr_1stExon_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="1stExon",]), A30P_incr_1stExon_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="1stExon",]), A30P_dcr_1stExon_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="1stExon",]), A30P_dcr_1stExon_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="1stExon",]), 
+  
+  A30P_incr_Body_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="Body",]), A30P_incr_Body_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="Body",]), A30P_dcr_Body_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="Body",]), A30P_dcr_Body_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="Body",]),   
+
+  A30P_incr_ExonBnd_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="ExonBnd",]), A30P_incr_ExonBnd_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="ExonBnd",]), A30P_dcr_ExonBnd_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="ExonBnd",]), A30P_dcr_ExonBnd_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="ExonBnd",]),   
+  
+                                    A30P_incr_UTR3_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="3'UTR",]), A30P_incr_UTR3_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$group=="3'UTR",]), A30P_dcr_UTR3_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="3'UTR",]), A30P_dcr_UTR3_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$group=="3'UTR",])))
+
+genomic_detail_A30P$group <- c(rep("Intergenic",4), rep("TSS1500",4), rep("TSS200", 4), rep("UTR5",4), rep("1stExon",4), rep("Body",4), rep("ExonBnd",4), rep("UTR3",4))
+genomic_detail_A30P$type <- rep(c("shared","unique"),16)
+genomic_detail_A30P$direction <- rep(c("Increase", "Increase", "Decrease", "Decrease"),8)
+genomic_detail_A30P$Category <- paste(genomic_detail_A30P$direction, genomic_detail_A30P$type, sep="_")
+genomic_detail_A30P$group <- as.factor(genomic_detail_A30P$group)
+genomic_detail_A30P$group <- reorder.factor(genomic_detail_A30P$group, new.order=c("TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+
+
+genomic_detail_WT$Category <- as.factor(genomic_detail_WT$Category)
+genomic_detail_WT$Category <- reorder.factor(genomic_detail_WT$Category, new.order=c("Increase_unique", "Increase_shared","Decrease_unique","Decrease_shared"))
+genomic_detail_WT <- genomic_detail_WT %>% arrange(Category)
+genomic_detail_A30P$Category <- as.factor(genomic_detail_A30P$Category)
+genomic_detail_A30P$Category <- reorder.factor(genomic_detail_A30P$Category, new.order=c("Increase_unique", "Increase_shared","Decrease_unique","Decrease_shared"))
+genomic_detail_A30P <- genomic_detail_A30P %>% arrange(Category)
+
+genomic_detail_WT <- genomic_detail_WT %>% arrange(group)
+genomic_detail_WT$value[genomic_detail_WT$value==0] <- NA
+genomic_detail_A30P <- genomic_detail_A30P %>% arrange(group)
+genomic_detail_A30P$value[genomic_detail_A30P$value==0] <- NA
+
+SNCA_OE <- ggplot(genomic_detail_WT, aes(x=group, y=value, fill=Category, label=value)) + geom_bar(position="fill", stat="identity") + theme_bw() + ylab("Fraction of Hits") + scale_fill_manual(values=c("blue", "darkblue", "red", "brown")) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12), legend.position = "none") + ggtitle("Control vs SNCA-OE") + xlab("Genomic Context") + geom_text(position=position_fill(vjust=0.5), color="white")
+
+A30P <- ggplot(genomic_detail_A30P, aes(x=group, y=value, fill=Category, label=value)) + geom_bar(position="fill", stat="identity") + theme_bw() + ylab("Fraction of Hits") + scale_fill_manual(values=c("blue", "darkblue", "red", "brown")) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12), legend.position="none") + ggtitle("Control vs A30P") + xlab("Genomic Context") + geom_text(position=position_fill(vjust=0.5), color="white")
+
+grid.arrange(SNCA_OE, A30P, nrow=1)
+```
+![Unique vs shared hits for each genotype, genomic context - fraction of total](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hits_unique_shared_hmC_fraction_082020.png)
+
+##Plotting CGI enrichment - detailed
+Including direction of DNAm change and whether each hit is unique to one genotype or shared between genotypes.
+```{r plot CGI enrichment detailed, eval=F}
+#need to make a data frame with four categories (increased DNAm shared/unique, decreased DNAm shared/unique) and the number of probes in each category
+
+###ctrl vs WT
+CGI_detail_WT <- melt(data.frame(
+WT_incr_NShore_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="N_Shore",]), WT_incr_NShore_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="N_Shore",]), WT_dcr_NShore_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="N_Shore",]), WT_dcr_NShore_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="N_Shore",]), 
+  
+  WT_incr_N_Shelf_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="N_Shelf",]), WT_incr_N_Shelf_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="N_Shelf",]), WT_dcr_N_Shelf_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="N_Shelf",]), WT_dcr_N_Shelf_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="N_Shelf",]), 
+  
+                                  WT_incr_Island_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="Island",]), WT_incr_Island_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="Island",]), WT_dcr_Island_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="Island",]), WT_dcr_Island_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="Island",]), 
+                            
+
+                                  WT_incr_S_Shore_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="S_Shore",]), WT_incr_S_Shore_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="S_Shore",]), WT_dcr_S_Shore_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="S_Shore",]), WT_dcr_S_Shore_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="S_Shore",]), 
+  
+    WT_incr_S_Shelf_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="S_Shelf",]), WT_incr_S_Shelf_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="S_Shelf",]), WT_dcr_S_Shelf_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="S_Shelf",]), WT_dcr_S_Shelf_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="S_Shelf",]), 
+  
+  WT_incr_OpenSea_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="OpenSea",]), WT_incr_OpenSea_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Increase" & WT_hmC_gene_list$Relation_to_Island=="OpenSea",]), WT_dcr_OpenSea_shared=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==TRUE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="OpenSea",]), WT_dcr_OpenSea_unique=nrow(WT_hmC_gene_list[WT_hmC_gene_list$overlap==FALSE & WT_hmC_gene_list$DNAm_change=="Decrease" & WT_hmC_gene_list$Relation_to_Island=="OpenSea",])
+))
+
+CGI_detail_WT$Relation_to_Island <- c(rep("N_Shore",4), rep("N_Shelf",4), rep("Island", 4), rep("S_Shore",4), rep("S_Shelf",4), rep("OpenSea",4))
+CGI_detail_WT$type <- rep(c("shared","unique"),12)
+CGI_detail_WT$direction <- rep(c("Increase", "Increase", "Decrease", "Decrease"),6)
+CGI_detail_WT$Category <- paste(CGI_detail_WT$direction, CGI_detail_WT$type, sep="_")
+CGI_detail_WT$Relation_to_Island <- as.factor(CGI_detail_WT$Relation_to_Island)
+CGI_detail_WT$Relation_to_Island <- reorder.factor(CGI_detail_WT$Relation_to_Island, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+
+###ctrl vs A30P
+CGI_detail_A30P <- melt(data.frame(
+A30P_incr_NShore_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="N_Shore",]), A30P_incr_NShore_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="N_Shore",]), A30P_dcr_NShore_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="N_Shore",]), A30P_dcr_NShore_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="N_Shore",]), 
+  
+  A30P_incr_N_Shelf_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="N_Shelf",]), A30P_incr_N_Shelf_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="N_Shelf",]), A30P_dcr_N_Shelf_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="N_Shelf",]), A30P_dcr_N_Shelf_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="N_Shelf",]), 
+  
+                                  A30P_incr_Island_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="Island",]), A30P_incr_Island_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="Island",]), A30P_dcr_Island_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="Island",]), A30P_dcr_Island_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="Island",]), 
+                            
+
+                                  A30P_incr_S_Shore_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="S_Shore",]), A30P_incr_S_Shore_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="S_Shore",]), A30P_dcr_S_Shore_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="S_Shore",]), A30P_dcr_S_Shore_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="S_Shore",]), 
+  
+    A30P_incr_S_Shelf_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="S_Shelf",]), A30P_incr_S_Shelf_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="S_Shelf",]), A30P_dcr_S_Shelf_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="S_Shelf",]), A30P_dcr_S_Shelf_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="S_Shelf",]), 
+  
+  A30P_incr_OpenSea_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="OpenSea",]), A30P_incr_OpenSea_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Increase" & A30P_hmC_gene_list$Relation_to_Island=="OpenSea",]), A30P_dcr_OpenSea_shared=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==TRUE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="OpenSea",]), A30P_dcr_OpenSea_unique=nrow(A30P_hmC_gene_list[A30P_hmC_gene_list$overlap==FALSE & A30P_hmC_gene_list$DNAm_change=="Decrease" & A30P_hmC_gene_list$Relation_to_Island=="OpenSea",])
+))
+
+CGI_detail_A30P$Relation_to_Island <- c(rep("N_Shore",4), rep("N_Shelf",4), rep("Island", 4), rep("S_Shore",4), rep("S_Shelf",4), rep("OpenSea",4))
+CGI_detail_A30P$type <- rep(c("shared","unique"),12)
+CGI_detail_A30P$direction <- rep(c("Increase", "Increase", "Decrease", "Decrease"),6)
+CGI_detail_A30P$Category <- paste(CGI_detail_A30P$direction, CGI_detail_A30P$type, sep="_")
+CGI_detail_A30P$Relation_to_Island <- as.factor(CGI_detail_A30P$Relation_to_Island)
+CGI_detail_A30P$Relation_to_Island <- reorder.factor(CGI_detail_A30P$Relation_to_Island, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+
+CGI_detail_WT$Category <- as.factor(CGI_detail_WT$Category)
+CGI_detail_WT$Category <- reorder.factor(CGI_detail_WT$Category, new.order=c("Increase_unique", "Increase_shared","Decrease_unique","Decrease_shared"))
+CGI_detail_WT <- CGI_detail_WT %>% arrange(Category)
+CGI_detail_A30P$Category <- as.factor(CGI_detail_A30P$Category)
+CGI_detail_A30P$Category <- reorder.factor(CGI_detail_A30P$Category, new.order=c("Increase_unique", "Increase_shared","Decrease_unique","Decrease_shared"))
+CGI_detail_A30P <- CGI_detail_A30P %>% arrange(Category)
+
+CGI_detail_WT <- CGI_detail_WT %>% arrange(Relation_to_Island)
+CGI_detail_WT$value[CGI_detail_WT$value==0] <- NA
+CGI_detail_A30P <- CGI_detail_A30P %>% arrange(Relation_to_Island)
+CGI_detail_A30P$value[CGI_detail_A30P$value==0] <- NA
+
+SNCA_OE <- ggplot(CGI_detail_WT, aes(x=Relation_to_Island, y=value, fill=Category, label=value)) + geom_bar(position="fill", stat="identity") + theme_bw() + ylab("Fraction of Hits") + scale_fill_manual(values=c("blue", "darkblue", "red", "brown")) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12),legend.position = "none") + ggtitle("Control vs SNCA-OE") + xlab("Relation to CpG Island") + geom_text(position=position_fill(vjust=0.5), color="white")
+
+A30P <- ggplot(CGI_detail_A30P, aes(x=Relation_to_Island, y=value, fill=Category, label=value)) + geom_bar(position="fill", stat="identity") + theme_bw() + ylab("Fraction of Hits") + scale_fill_manual(values=c("blue", "darkblue", "red", "brown")) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12),legend.position="none") + ggtitle("Control vs A30P") + xlab("Relation to CpG Island") + geom_text(position=position_fill(vjust=0.5), color="white")
+
+grid.arrange(SNCA_OE, A30P, nrow=1)
+```
+![Unique vs shared hits for each genotype, CGI context - by fraction](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hits_unique_shared_cgi_hmC_082020.png)
+
+#Calculating genomic context enrichment, WT mC/hmC probes
+```{r genomic enrichment WT mC hmC, eval=F}
+#Plot fold change across genomic contexts
+
+#background
+locations_EPIC <- Gene_CpG_Relations_update$region
+summary <- summary(as.factor(locations_EPIC))
+summary
+#  3'UTR   5'UTR ExonBnd  TSS200    Body 1stExon TSS1500         
+#   6987   20922    2045    5826  107867    1290   19923   68580 
+locations_EPIC <- data.frame(EPIC_count=summary)
+rownames(locations_EPIC) <- c("UTR3","UTR5","ExonBnd","TSS200","Body","1stExon","TSS1500","Intergenic")
+
+#calculating the proportion of overall sites in each category (will use this number to normalize hits to the background)
+locations_EPIC$EPIC_fraction <- as.vector(apply(locations_EPIC, 2, function(x) x/sum(locations_EPIC$EPIC_count)))
+
+#getting the number of hits in each genomic context for WT
+locations <- Gene_CpG_Relations_update[Gene_CpG_Relations_update$Probe_ID %in% WT_mC_hmC_hits,"region"]
+loc_summary <- summary(as.factor(locations))
+loc_summary
+#  3'UTR   5'UTR ExonBnd  TSS200    Body 1stExon TSS1500         
+#      4       8       0       6      51       0       4      36 
+length(locations) #109
+
+#add to dataframe
+locations_EPIC$real_count <- loc_summary
+locations_EPIC$real_fraction <- sapply(1:length(locations_EPIC$real_count), function(x) locations_EPIC$real_count[x]/sum(locations_EPIC$real_count))
+
+#caluclate fold change
+locations_EPIC$fold_change <- sapply(1:nrow(locations_EPIC), function(x) foldchange(locations_EPIC$real_fraction[x], locations_EPIC$EPIC_fraction[x]))
+
+locations_norm_WT <- locations_EPIC
+locations_norm_WT$Name <- rownames(locations_EPIC)
+locations_norm_WT$Name <- reorder.factor(locations_norm_WT$Name, new.order=c("TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+locations_norm_WT$Genotype <- "SNCA-OE"
+```
+
+#Calculating enrichment of hits by CGI context, WT mC/hmC
+```{r CGI enrichment WT mC hmC, eval=F}
+#calculating background numbers/normalization factor
+CGI_EPIC <- WT_hmC_gene_list$Relation_to_Island
+summary <- summary(as.factor(CGI_EPIC))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#  15614   10420   22588  155516    9799   19503 
+CGI_EPIC <- data.frame(EPIC_count=summary)
+rownames(CGI_EPIC) <- c("Island", "N_Shelf", "N_Shore", "OpenSea","S_Shelf", "S_Shore")
+CGI_EPIC$EPIC_fraction <- as.vector(apply(CGI_EPIC, 2, function(x) x/sum(CGI_EPIC$EPIC_count)))
+
+#enrichment of hits in WT
+CGI <- WT_hmC_gene_list[WT_hmC_gene_list$Name %in% WT_mC_hmC_hits,]$Relation_to_Island
+CGI_summary <- summary(as.factor(CGI))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#     15       4      10      72       2       6 
+length(CGI) #109
+
+CGI_EPIC$real_count <- CGI_summary
+CGI_EPIC$real_fraction <- sapply(1:length(CGI_EPIC$real_count), function(x) CGI_EPIC$real_count[x]/sum(CGI_EPIC$real_count))
+
+#caluclate fold change
+CGI_EPIC$fold_change <- sapply(1:nrow(CGI_EPIC), function(x) foldchange(CGI_EPIC$real_fraction[x], CGI_EPIC$EPIC_fraction[x]))
+
+WT_CGI_norm <- CGI_EPIC
+WT_CGI_norm$Name <- rownames(CGI_EPIC)
+WT_CGI_norm$Name <- reorder.factor(WT_CGI_norm$Name, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+WT_CGI_norm$Genotype <- "SNCA-OE"
+```
+
+#Plotting genomic context enrichment, A30P mC/hmC
+```{r genomic enrichment A30P mC hmC, eval=F}
+#enrichment of A30P hits
+locations <- Gene_CpG_Relations_update[Gene_CpG_Relations_update$Probe_ID %in% A30P_mC_hmC_hits,"region"]
+loc_summary <- summary(as.factor(locations))
+loc_summary
+#  3'UTR   5'UTR ExonBnd  TSS200    Body 1stExon TSS1500         
+#      2       4       0       1      16       0       1      10 
+
+#add to dataframe
+locations_EPIC$real_count <- loc_summary
+locations_EPIC$real_fraction <- sapply(1:length(locations_EPIC$real_count), function(x) locations_EPIC$real_count[x]/sum(locations_EPIC$real_count))
+
+#caluclate fold change
+locations_EPIC$fold_change <- sapply(1:nrow(locations_EPIC), function(x) foldchange(locations_EPIC$real_fraction[x], locations_EPIC$EPIC_fraction[x]))
+
+locations_norm_A30P <- locations_EPIC
+locations_norm_A30P$Name <- rownames(locations_EPIC)
+locations_norm_A30P$Name <- reorder.factor(locations_norm_A30P$Name, new.order=c("TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+locations_norm_A30P$Genotype <- "A30P"
+```
+
+#Plotting genomic context enrichment in both genotypes
+```{r plot genomic enrichment mC hmC, eval=F}
+locations_norm <- rbind(locations_norm_WT, locations_norm_A30P)
+locations_norm$Genotype <- factor(locations_norm$Genotype)
+locations_norm$Genotype <- relevel(locations_norm$Genotype, ref="SNCA-OE")
+
+#nothing was significant in permutation - skip stars
+
+#if there were no hits in a category, fold change comes out as Inf - replace this with 0
+locations_norm$fold_change[abs(locations_norm$fold_change)==Inf] <- 0
+summary(locations_norm$fold_change)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#-2.9017  0.0000  1.0069  0.3498  1.1904  2.2056 
+    
+ggplot(locations_norm, aes(x=Name, y=fold_change, fill=Genotype)) + geom_bar(stat="identity", position="dodge") + theme_bw() + ylab("Fold Change over Array Background") + xlab("Genomic Context") + scale_fill_manual(values=c("gray75", "gray48"), name="Comparison", labels=c("Control vs. SNCA-OE", "Control vs. A30P")) + geom_hline(yintercept=0) + ylim(c(-3,2.5)) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12))
+```
+![Genomic context fold enrichment for both genotypes, mC/hmC shared probes](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/genomic_context_mC_hmC_082020.png)
+
+#Plotting CGI enrichment in both genotypes
+```{r plot CGI enrichment mC hmC, eval=F}
+CGI <- unlist(strsplit(as.character(A30P_hmC_gene_list[A30P_hmC_gene_list$Name %in% A30P_mC_hmC_hits,]$Relation_to_Island), split=";"))
+CGI_summary <- summary(as.factor(CGI))
+# Island N_Shore OpenSea 
+#      1       2      31 
+length(CGI) #34
+
+CGI_summary <- c(CGI_summary[1],0,CGI_summary[2:3],0,0)
+names(CGI_summary) <- c("Island", "N_Shelf", "N_Shore", "OpenSea", "S_Shore", "S_Shelf")
+CGI_EPIC$real_count <- CGI_summary
+CGI_EPIC$real_fraction <- sapply(1:length(CGI_EPIC$real_count), function(x) CGI_EPIC$real_count[x]/sum(CGI_EPIC$real_count))
+
+#caluclate fold change
+CGI_EPIC$fold_change <- sapply(1:nrow(CGI_EPIC), function(x) foldchange(CGI_EPIC$real_fraction[x], CGI_EPIC$EPIC_fraction[x]))
+
+A30P_CGI_norm <- CGI_EPIC
+A30P_CGI_norm$Name <- rownames(CGI_EPIC)
+A30P_CGI_norm$Name <- reorder.factor(A30P_CGI_norm$Name, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+A30P_CGI_norm$Genotype <- "A30P"
+
+CGI_norm <- rbind(WT_CGI_norm, A30P_CGI_norm)
+CGI_norm$Genotype <- factor(CGI_norm$Genotype)
+CGI_norm$Genotype <- relevel(CGI_norm$Genotype, ref="SNCA-OE")
+
+#add significance from permutation
+CGI_norm$sig <- c(rep("", 9),"*",rep("",2))
+
+#if there were no hits in a category, fold change comes out as Inf - replace this with 0
+CGI_norm$fold_change[abs(CGI_norm$fold_change)==Inf] <- 0
+summary(CGI_norm$fold_change)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#-2.2877 -1.5496 -1.0316 -0.6315  0.0000  2.0574 
+
+ggplot(CGI_norm, aes(x=Name, y=fold_change, fill=Genotype)) + geom_bar(stat="identity", position="dodge") + theme_bw() + ylab("Fold Change over Array Background") + xlab("Relation to CpG Island") + scale_fill_manual(values=c("gray75", "gray48"), name="Comparison", labels=c("Control vs. SNCA-OE", "Control vs. A30P")) + geom_hline(yintercept=0) + ylim(c(-3,3)) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12))  + 
+   geom_text(data = subset(CGI_norm, fold_change >= 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 0, size=4) +
+    geom_text(data = subset(CGI_norm, fold_change < 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 1.5, size=4)
+
+#The * isn't positioning properly for some reason (fix manually for figures)
+```
+![CpG island context, mC/hmC probes](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CGI_mC_hmC_06292020.png)

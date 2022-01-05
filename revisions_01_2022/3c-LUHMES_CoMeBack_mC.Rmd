@@ -1,0 +1,618 @@
+DecipherPD LUHMES EPIC Array Runs - Differential Methylation Analysis
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: December 15, 2021
+
+This analysis contains EPIC BeadChip array data on Lund human mesencephalic (LUHMES) cells, differentiated into dopamnergic neurons, for the DecipherPD consortium. Tiago Outerio's group (Gottingen, Germany) has created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (a-Syn) as well as GFP. This project compares control+GFP versus WTa-Syn+GFP cells or A30Pa-Syn+GFP cells; the data consists of seven biological replicates of control cells, eight biological replicates each of SNCA-OE and A30P cells, and one technical replicate of SNCA-OE. Each of these samples were run as bisulfite and oxidative bisulfite-converted aliquots (total = 24 samples*2 conversion types = 48 reactions).
+
+#Load packages
+```{r load packages, results='hide', eval=F}
+setwd("~/")
+library(comeback)
+library(moments)
+library(ggplot2)
+library(DescTools)
+library(reshape2)
+library(normtest)
+library(limma)
+library(lumi)
+library(gtools)
+```
+
+# Running CoMeBack - defining CMRs
+Y chromosome probes were removed, and CMR function was tweaked to allow it to run on X chromosomes (by default it ran into an indexing error if any sex chromosomes were included). cmr() function tweak from Beryl Zhuang.
+```{r CoMeBack, eval=F}
+# load betas
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+betas <- t(betas(mC_methylumi_N)) #probes should be columns 
+
+fdat <- fData(mC_methylumi_N)
+fdat_noY <- fdat[-which(fdat$CHR=="Y"),]
+betas_noY <- betas[,colnames(betas) %in% fdat_noY$TargetID]
+ncol(betas) #813,589
+ncol(betas_noY) #813,538 (51 Y chr probes)
+
+# construct CMRs using fixed Spearman correlation cut-off of 0.4 and maximum probe distance of 1Kbp
+##Might want a correlation cut off of 0.5, 0.4, or 0.3
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/cmr_no_Y.R') #Beryl Zhuang's fix for LUHMES datasets with X chromosomes but not Y chromosomes (all female). Without the fix, original cmr function fails when it searches for the sex chromosomes.
+CMRs_cor40_pw1K <- cmr_no_Y(betas_noY, cormethod = "pearson", corlo = 0.4, maxprbdst =1000, Iarray="EPIC")
+#[1] "Getting CpG info, please wait."
+#[1] "Found  801691  probes from  23  out of 24 chromosomes"
+
+save(CMRs_cor40_pw1K, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CMRs_mC.RData")
+
+# calculate CMR composite betas
+cmr_cor40_cmpB=cmr_comp(cmrs = CMRs_cor40_pw1K, Mdata = betas_noY)
+#"Found 57941 CMRs, this may take awhile."
+save(cmr_cor40_cmpB, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CMR_cmpB_mC.Rdata")
+
+#plot number of CMRs per chromosome
+cmrs_per_chr <- sapply(1:length(CMRs_cor40_pw1K), function(x) length(unlist(CMRs_cor40_pw1K[[x]])))
+cmrs_per_chr <- data.frame(chr=names(CMRs_cor40_pw1K), num_CMRs=cmrs_per_chr)
+cmrs_per_chr$chr <- reorder.factor(cmrs_per_chr$chr, new.order=c("chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18","chr19","chr20","chr21","chr22", "chrX", "chrY"))
+
+summary(cmrs_per_chr$num_CMRs)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#      0    3882    6449    5976    7812   13384 
+      
+ggplot(cmrs_per_chr, aes(x=chr, y=num_CMRs, fill="black")) + geom_col(show.legend=FALSE) + scale_fill_manual(values="black") + theme_bw() + theme(axis.text.x = element_text(angle = 90, hjust = 1), axis.title.x = element_blank()) + ylab("Number of CMRs") + ylim(c(0,14000))
+```
+![Number of CMRs per chromosome](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CMRs_per_chr_mC.png)
+
+# limma for WT vs GFP and A30P vs GFP
+```{r limma, eval=F}
+cmpB_t <- t(cmr_cor40_cmpB)
+meta <- pData(mC_methylumi_N)
+meta$Genotype <- as.factor(meta$Genotype)
+meta$Genotype <- relevel(meta$Genotype, ref="GFP") #relevel so A30P/WT genotypes are compared to control (GFP)
+
+# create the design for the model
+design <- model.matrix(~meta$Genotype)
+
+# fit the linear model to M-values
+Mvals <- beta2m(cmpB_t)
+all.equal(colnames(Mvals),rownames(meta)) #TRUE
+fit <- lmFit(Mvals, design)
+
+# fit the contrasts
+fit2 <- eBayes(fit)
+
+# look at the numbers of DM CpGs at FDR < 0.05
+summary(decideTests(fit2))
+#       (Intercept) meta$GenotypeA30P meta$GenotypeWT
+#Down         32095              6219           17058
+#NotSig        1237             46459           32079
+#Up           24609              5263            8804
+
+# get the table of results for the first contrast (A30P) and second contrast (WT)
+annEPIC <- read.csv("~/KoborLab/kobor_space/shared_coding_resource/Illumina_EPIC/EPIC_KH_Annotation.csv", row.names = 1)
+annEPICsub <- annEPIC[match(rownames(Mvals),annEPIC$Name),
+c(1:4,12:19,24:ncol(annEPIC))]
+A30P_DMPs <- topTable(fit2, num=Inf, coef=2, genelist=annEPICsub)
+WT_DMPs <- topTable(fit2, num=Inf, coef=3, genelist=annEPICsub)
+```
+
+### Volcano plot for WT limma
+```{r volcano WT limma, eval=F}
+#Add DBs to limma result
+delta_cmpB_WT_GFP <- rowMeans(cmpB_t[,c(2,5,10,12,14,16,18,23)]) - rowMeans(cmpB_t[,c(1,4,6,11,13,19,22)])
+delta_cmpB_WT_GFP <- delta_cmpB_WT_GFP[match(WT_DMPs$Name, names(delta_cmpB_WT_GFP))]
+all.equal(names(delta_cmpB_WT_GFP), WT_DMPs$Name)
+cmr_limma_WT_GFP <- data.frame(name=WT_DMPs$Name, DcB=delta_cmpB_WT_GFP, cmr_limma_pval=WT_DMPs$P.Value, cmr_limma_BH=WT_DMPs$adj.P.Val)
+cmr_limma_WT_GFP$threshold <- (cmr_limma_WT_GFP$cmr_limma_BH<=0.05 & abs(cmr_limma_WT_GFP$DcB)>=0.05)
+cmr_limma_WT_GFP$DNAm_change <- cmr_limma_WT_GFP$threshold
+cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE & cmr_limma_WT_GFP$DcB>0,]$DNAm_change <- "Increase"
+cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE & cmr_limma_WT_GFP$DcB<0,]$DNAm_change <- "Decrease"
+cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==FALSE,]$DNAm_change <- "NS"
+summary(as.factor(cmr_limma_WT_GFP$DNAm_change))
+#Decrease Increase       NS 
+#    2479     1276    54186 
+
+write.csv(cmr_limma_WT_GFP, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_CMR_limma.csv", row.names=FALSE)
+
+max(-log10(cmr_limma_WT_GFP$cmr_limma_BH)) #12.49252
+max(abs(cmr_limma_WT_GFP$DcB)) #0.1788103
+
+ggplot(data=cmr_limma_WT_GFP, aes(x=DcB, y=-log10(cmr_limma_BH), colour=DNAm_change)) +
+  geom_point(alpha=0.4, size=1.75) +
+  labs(legend.position = "none") +
+  xlab("Delta Composite Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("red","blue","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,13)) + xlim(c(-0.35, 0.35))
+
+#permuting gene feature enrichment/depletion
+source("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/CGI_Gene_permutation_enrichment_enhancer.R")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/master_anno_en.RData")
+Gene_CpG_Relations_update <- master_anno_en[master_anno_en$site %in% WT_DMPs$Name,]
+colnames(Gene_CpG_Relations_update) <- c("Probe_ID","region")
+Gene_CpG_Relations_update$region[Gene_CpG_Relations_update$region==""] <- "Intergenic"
+CGI_Gene_permutation_enrichment(cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE,"name"], cmr_limma_WT_GFP$name, permutation_number=10000)
+#[1] "FDR Adjusted Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 0.0225; Feature: 1stExon"
+#[1] "Enrichment: 1; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 0.8127; Feature: 5'UTR"
+#[1] "Enrichment: 0.0495; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 0; Feature: Enhancer"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 0; Depletion 1; Feature: Intergenic"
+#[1] "Enrichment: 0.0279; Depletion 1; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 0; Feature: TSS200"
+
+#CGI permutation
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/CGI_permutation_enrichment.R')
+annEPIC <- annEPICsub
+CGI_permutation_enrichment(cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE,"name"], cmr_limma_WT_GFP$name, permutation_number=10000)
+#[1] "Enrichment: 1; Depletion: 0; Feature: Island"
+#[1] "Enrichment: 0.7782; Depletion: 1; Feature: N_Shelf"
+#[1] "Enrichment: 0.0234; Depletion: 1; Feature: N_Shore"
+#[1] "Enrichment: 0; Depletion: 1; Feature: OpenSea"
+#[1] "Enrichment: 1; Depletion: 0.2412; Feature: S_Shelf"
+#[1] "Enrichment: 1; Depletion: 0.0168; Feature: S_Shore"
+```
+![Volcano plot: WT vs Control limma (mC)](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_mC_WT_CMR_limma.png)
+
+### Volcano plot for A30P limma
+```{r volcano A30P limma, eval=F}
+#Add DBs to limma result
+#A30P
+delta_cmpB_A30P_GFP <- rowMeans(cmpB_t[,c(3,7,8,9,15,17,20,21)]) - rowMeans(cmpB_t[,c(1,4,6,11,13,19,22)])
+A30P_DMPs <- A30P_DMPs[A30P_DMPs$Name %in% names(delta_cmpB_A30P_GFP),]
+delta_cmpB_A30P_GFP <- delta_cmpB_A30P_GFP[match(A30P_DMPs$Name, names(delta_cmpB_A30P_GFP))]
+cmr_limma_A30P_GFP <- data.frame(name=A30P_DMPs$Name, DcB=delta_cmpB_A30P_GFP, cmr_limma_pval=A30P_DMPs$P.Value, cmr_limma_BH=A30P_DMPs$adj.P.Val)
+cmr_limma_A30P_GFP$threshold <- (cmr_limma_A30P_GFP$cmr_limma_BH<=0.05 & abs(cmr_limma_A30P_GFP$DcB)>=0.05)
+cmr_limma_A30P_GFP$DNAm_change <- cmr_limma_A30P_GFP$threshold
+cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE & cmr_limma_A30P_GFP$DcB>0,]$DNAm_change <- "Increase"
+cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE & cmr_limma_A30P_GFP$DcB<0,]$DNAm_change <- "Decrease"
+cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==FALSE,]$DNAm_change <- "NS"
+summary(as.factor(cmr_limma_A30P_GFP$DNAm_change))
+#Decrease Increase       NS 
+#     221      327    57393 
+
+write.csv(cmr_limma_A30P_GFP, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_CMR_limma.csv")
+
+max(-log10(cmr_limma_A30P_GFP$cmr_limma_BH)) #9.524118
+max(abs(cmr_limma_A30P_GFP$DcB)) #0.1171646
+
+ggplot(data=cmr_limma_A30P_GFP, aes(x=DcB, y=-log10(cmr_limma_BH), colour=DNAm_change)) +
+  geom_point(alpha=0.4, size=1.75) +
+  labs(legend.position = "none") +
+  xlab("Delta Composite Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("red","blue","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,13)) + xlim(c(-0.35, 0.35))
+
+#permuting gene feature enrichment/depletion
+CGI_Gene_permutation_enrichment(cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE,"name"], cmr_limma_A30P_GFP$name, permutation_number=10000)
+#[1] "FDR Adjusted Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 0.0126; Feature: 1stExon"
+#[1] "Enrichment: 0.4545; Depletion 1; Feature: 3'UTR"
+#[1] "Enrichment: 1; Depletion 1; Feature: 5'UTR"
+#[1] "Enrichment: 0.054; Depletion 1; Feature: Body"
+#[1] "Enrichment: 1; Depletion 0.0063; Feature: Enhancer"
+#[1] "Enrichment: 1; Depletion 1; Feature: ExonBnd"
+#[1] "Enrichment: 0; Depletion 1; Feature: Intergenic"
+#[1] "Enrichment: 1; Depletion 1; Feature: TSS1500"
+#[1] "Enrichment: 1; Depletion 0.6192; Feature: TSS200"
+
+#CGI permutation
+CGI_permutation_enrichment(cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE,"name"], cmr_limma_A30P_GFP$name, permutation_number=10000)
+#[1] "Enrichment: 1; Depletion: 0; Feature: Island"
+#[1] "Enrichment: 1; Depletion: 1; Feature: N_Shelf"
+#[1] "Enrichment: 0.6384; Depletion: 1; Feature: N_Shore"
+#[1] "Enrichment: 0; Depletion: 1; Feature: OpenSea"
+#[1] "Enrichment: 1; Depletion: 1; Feature: S_Shelf"
+#[1] "Enrichment: 1; Depletion: 0.1422; Feature: S_Shore"
+```
+![Volcano plot: A30P vs Control limma (mC)](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_mC_A30P_CMR_limma.png)
+
+# limma for WT vs A30P
+```{r limma, eval=F}
+meta_WT_A30P <- meta[meta$Genotype %in% c("WT","A30P"),]
+meta_WT_A30P$Genotype <- relevel(meta_WT_A30P$Genotype, ref="WT")
+
+# create the design for the model
+design <- model.matrix(~meta_WT_A30P$Genotype)
+
+# fit the linear model to M-values
+Mvals_WT_A30P <- Mvals[,colnames(Mvals) %in% rownames(meta_WT_A30P)]
+all.equal(colnames(Mvals_WT_A30P),rownames(meta_WT_A30P)) #TRUE
+fit <- lmFit(Mvals_WT_A30P, design)
+
+# fit the contrasts
+fit2 <- eBayes(fit)
+
+# look at the numbers of DM CpGs at FDR < 0.05
+summary(decideTests(fit2))
+#       (Intercept) meta_WT_A30P$GenotypeGFP meta_WT_A30P$GenotypeA30P
+#Down         32903                        0                      8907
+#NotSig        1082                        0                     29195
+#Up           23956                        0                     19839
+
+# get the table of results
+WT_A30P_DMPs <- topTable(fit2, num=Inf, coef=3, genelist=annEPICsub)
+```
+
+
+### Volcano plot for WT vs A30P limma
+```{r volcano WT A30P limma, eval=F}
+#Add DBs to limma result: WT - A30P
+#WT
+delta_cmpB_WT_A30P <- rowMeans(cmpB_t[,c(2,5,10,12,14,16,18,23)]) - rowMeans(cmpB_t[,c(3,7,8,9,15,17,20,21)])
+delta_cmpB_WT_A30P <- delta_cmpB_WT_A30P[match(WT_A30P_DMPs$Name, names(delta_cmpB_WT_A30P))]
+
+cmr_limma_WT_A30P <- data.frame(name=WT_A30P_DMPs$Name, DcB=delta_cmpB_WT_A30P, cmr_limma_pval=WT_A30P_DMPs$P.Value, cmr_limma_BH=WT_A30P_DMPs$adj.P.Val)
+cmr_limma_WT_A30P$threshold <- (cmr_limma_WT_A30P$cmr_limma_BH<=0.05 & abs(cmr_limma_WT_A30P$DcB)>=0.05)
+cmr_limma_WT_A30P$DNAm_change <- cmr_limma_WT_A30P$threshold
+cmr_limma_WT_A30P[cmr_limma_WT_A30P$threshold==TRUE & cmr_limma_WT_A30P$DcB>0,]$DNAm_change <- "Increase"
+cmr_limma_WT_A30P[cmr_limma_WT_A30P$threshold==TRUE & cmr_limma_WT_A30P$DcB<0,]$DNAm_change <- "Decrease"
+cmr_limma_WT_A30P[cmr_limma_WT_A30P$threshold==FALSE,]$DNAm_change <- "NS"
+summary(as.factor(cmr_limma_WT_A30P$DNAm_change))
+#Decrease Increase       NS 
+#     562      203    57176 
+
+write.csv(cmr_limma_WT_A30P, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_CMR_limma.csv")
+
+max(-log10(cmr_limma_WT_A30P$cmr_limma_BH)) #7.233582
+max(abs(cmr_limma_WT_A30P$DcB)) #0.1116359
+
+ggplot(data=cmr_limma_WT_A30P, aes(x=DcB, y=-log10(cmr_limma_BH), colour=DNAm_change)) +
+  geom_point(alpha=0.4, size=1.75) +
+  labs(legend.position = "none") +
+  xlab("Delta Composite Beta") + ylab("-log10 adj P-Value") + theme_bw() + scale_color_manual(values=c("red","blue","#bfbfbf")) + geom_hline(yintercept=-log10(0.05)) + geom_vline(xintercept=-0.05) + geom_vline(xintercept=0.05) + ylim(c(0,13)) + xlim(c(-0.35, 0.35))
+```
+![Volcano plot: WT vs A30P limma (mC)](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/volcano_mC_WT_A30P_CMR_limma.png)
+
+#Calculating genomic context enrichment, WT
+
+```{r genomic enrichment WT, eval=F}
+#Plot fold change across genomic contexts
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+fdat <- fData(mC_methylumi_N)
+
+#background
+locations_EPIC <- master_anno_en[master_anno_en$site %in% cmr_limma_WT_GFP$name,"group"]
+summary <- summary(as.factor(locations_EPIC))
+summary
+#          1stExon    3'UTR    5'UTR     Body Enhancer  ExonBnd  TSS1500   TSS200 
+#    8286      893      743     5157    13142    18282      286     6546     4606 
+locations_EPIC <- data.frame(EPIC_count=summary)
+rownames(locations_EPIC) <- c("Intergenic", "1stExon", "UTR3", "UTR5", "Body", "Enhancer", "ExonBnd", "TSS1500", "TSS200")
+
+#calculating the proportion of overall sites in each category (will use this number to normalize hits to the background)
+locations_EPIC$EPIC_fraction <- as.vector(apply(locations_EPIC, 2, function(x) x/sum(locations_EPIC$EPIC_count)))
+
+#double checking that all the probes were included in the background annotation - any outliers?
+nrow(cmr_limma_WT_GFP[-which(cmr_limma_WT_GFP$Name %in% master_anno_en$site),]) #0, no outliers
+
+#getting the number of hits in each genomic context for WT
+locations <- master_anno_en[master_anno_en$site %in% cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE,"name"],"group"]
+loc_summary <- summary(as.factor(locations))
+loc_summary
+#          1stExon    3'UTR    5'UTR     Body Enhancer  ExonBnd  TSS1500   TSS200 
+#     923       38       53      311      917      859       14      477      163
+length(locations) #3755
+
+#add to dataframe
+locations_EPIC$real_count <- loc_summary
+locations_EPIC$real_fraction <- sapply(1:length(locations_EPIC$real_count), function(x) locations_EPIC$real_count[x]/sum(locations_EPIC$real_count))
+
+#caluclate fold change
+locations_EPIC$fold_change <- sapply(1:nrow(locations_EPIC), function(x) foldchange(locations_EPIC$real_fraction[x], locations_EPIC$EPIC_fraction[x]))
+
+locations_norm_WT <- locations_EPIC
+locations_norm_WT$Name <- rownames(locations_EPIC)
+locations_norm_WT$Name <- reorder.factor(locations_norm_WT$Name, new.order=c("Enhancer","TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+locations_norm_WT$Genotype <- "WT aSyn"
+```
+
+#Calculating enrichment of hits by CGI context, WT
+
+```{r CGI enrichment WT, eval=F}
+#calculating background numbers/normalization factor
+all(cmr_limma_WT_GFP$name %in% WT_DMPs$Name) #TRUE
+CGI_EPIC <- WT_DMPs[WT_DMPs$Name %in% cmr_limma_WT_GFP$name,"Relation_to_Island"]
+summary <- summary(as.factor(CGI_EPIC))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#  17194    1832    9083   22908    1481    5443
+CGI_EPIC <- data.frame(EPIC_count=c(17194,1832,9083,22908,1481,5443))
+rownames(CGI_EPIC) <- c("Island", "N_Shelf", "N_Shore", "OpenSea","S_Shelf", "S_Shore")
+CGI_EPIC$EPIC_fraction <- as.vector(apply(CGI_EPIC, 2, function(x) x/sum(CGI_EPIC$EPIC_count)))
+
+#enrichment of hits in WT
+CGI <- WT_DMPs[WT_DMPs$Name %in% cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE,"name"],"Relation_to_Island"]
+CGI_summary <- summary(as.factor(CGI))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#    542     131     645    2053      79     305 
+length(CGI) #3755
+
+CGI_EPIC$real_count <- CGI_summary
+CGI_EPIC$real_fraction <- sapply(1:length(CGI_EPIC$real_count), function(x) CGI_EPIC$real_count[x]/sum(CGI_EPIC$real_count))
+
+#caluclate fold change
+CGI_EPIC$fold_change <- sapply(1:nrow(CGI_EPIC), function(x) foldchange(CGI_EPIC$real_fraction[x], CGI_EPIC$EPIC_fraction[x]))
+
+WT_CGI_norm <- CGI_EPIC
+WT_CGI_norm$Name <- rownames(CGI_EPIC)
+WT_CGI_norm$Name <- reorder.factor(WT_CGI_norm$Name, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+WT_CGI_norm$Genotype <- "WT aSyn"
+```
+
+#Plotting genomic context enrichment, A30P
+
+```{r genomic enrichment A30P, eval=F}
+#enrichment of A30P hits
+#double checking all sites in differential methylation were in background annotation
+nrow(cmr_limma_A30P_GFP[-which(cmr_limma_A30P_GFP$name %in% master_anno_en$site),]) #0 - no outliers
+
+locations <- master_anno_en[master_anno_en$site %in% cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE,"name"],"group"]
+loc_summary <- summary(as.factor(locations))
+loc_summary
+#          1stExon    3'UTR    5'UTR     Body Enhancer  ExonBnd  TSS1500   TSS200 
+#     145        1       12       42      150      121        1       57       19 
+
+#add to dataframe
+locations_EPIC$real_count <- loc_summary
+locations_EPIC$real_fraction <- sapply(1:length(locations_EPIC$real_count), function(x) locations_EPIC$real_count[x]/sum(locations_EPIC$real_count))
+
+#calculate fold change
+locations_EPIC$fold_change <- sapply(1:nrow(locations_EPIC), function(x) foldchange(locations_EPIC$real_fraction[x], locations_EPIC$EPIC_fraction[x]))
+
+length(locations) #548
+
+locations_norm_A30P <- locations_EPIC
+locations_norm_A30P$Name <- rownames(locations_EPIC)
+locations_norm_A30P$Name <- reorder.factor(locations_norm_A30P$Name, new.order=c("Enhancer","TSS1500", "TSS200", "UTR5", "1stExon", "ExonBnd", "Body", "UTR3", "Intergenic"))
+locations_norm_A30P$Genotype <- "A30P aSyn"
+```
+
+#Plotting genomic context enrichment in both genotypes
+```{r plot genomic enrichment, eval=F}
+locations_norm <- rbind(locations_norm_WT, locations_norm_A30P)
+locations_norm$Genotype <- factor(locations_norm$Genotype)
+locations_norm$Genotype <- relevel(locations_norm$Genotype, ref="WT aSyn")
+
+#add significance from permutation
+#A30P
+#1stexon *, enhancer *, intergenic ***
+
+#WT
+#1stexon *, body *, enhancer ***, intergenic ***, tss1500 *, tss200 ***
+
+locations_norm$sig <- as.factor(c("***","*",NA,NA,"*","***",NA,"*","***","***","*",rep(NA,3),"*",rep(NA,3)))
+summary(locations_norm$fold_change)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#-8.4459 -1.4995 -1.1237 -0.8037  1.1185  1.8502 
+
+ggplot(locations_norm, aes(x=Name, y=fold_change, fill=Genotype)) + geom_bar(stat="identity", position="dodge") + theme_bw() + ylab("Fold Change over CMR Background") + xlab("Genomic Context") + scale_fill_manual(values=c("gray75", "chocolate"), name="Comparison", labels=c("Control vs. WT aSyn", "Control vs. A30P aSyn")) + geom_hline(yintercept=0) + ylim(c(-9,2)) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12))  + 
+   geom_text(data = subset(locations_norm, fold_change >= 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 0, size=4) +
+    geom_text(data = subset(locations_norm, fold_change < 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 1.5, size=4)
+```
+![Genomic context fold enrichment for both genotypes](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/genomic_context_mC_CMR.png)
+
+#Plotting CGI enrichment in both genotypes
+```{r plot CGI enrichment, eval=F}
+CGI <- unlist(strsplit(as.character(A30P_DMPs[A30P_DMPs$Name %in% cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE,"name"],"Relation_to_Island"]), split=";"))
+CGI_summary <- summary(as.factor(CGI))
+# Island N_Shelf N_Shore OpenSea S_Shelf S_Shore 
+#     91      15      97     292      15      3
+length(CGI) #548
+
+CGI_EPIC$real_count <- CGI_summary
+CGI_EPIC$real_fraction <- sapply(1:length(CGI_EPIC$real_count), function(x) CGI_EPIC$real_count[x]/sum(CGI_EPIC$real_count))
+
+#caluclate fold change
+CGI_EPIC$fold_change <- sapply(1:nrow(CGI_EPIC), function(x) foldchange(CGI_EPIC$real_fraction[x], CGI_EPIC$EPIC_fraction[x]))
+
+A30P_CGI_norm <- CGI_EPIC
+A30P_CGI_norm$Name <- rownames(CGI_EPIC)
+A30P_CGI_norm$Name <- reorder.factor(A30P_CGI_norm$Name, new.order=c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea"))
+A30P_CGI_norm$Genotype <- "A30P aSyn"
+
+CGI_norm <- rbind(WT_CGI_norm, A30P_CGI_norm)
+CGI_norm$Genotype <- factor(CGI_norm$Genotype)
+CGI_norm$Genotype <- relevel(CGI_norm$Genotype, ref="WT aSyn")
+
+#add significance from permutation
+#WT
+#island ***, N_Shore *, OpenSea ***, S_Shore *
+
+#A30P
+#island ***, OpenSea ***
+
+CGI_norm$sig <- c("***",NA,"*","***",NA,"*","***",NA,NA,"***",NA,NA)
+summary(CGI_norm$fold_change)
+#    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+#-2.05590 -1.24988 -0.04212 -0.13288  1.10981  1.38286 
+
+ggplot(CGI_norm, aes(x=Name, y=fold_change, fill=Genotype)) + geom_bar(stat="identity", position="dodge") + theme_bw() + ylab("Fold Change over CMR Background") + xlab("Genomic Context") + scale_fill_manual(values=c("gray75", "chocolate"), name="Comparison", labels=c("Control vs. WT aSyn", "Control vs. A30P aSyn")) + geom_hline(yintercept=0) + ylim(c(-9,2)) + theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle=45, hjust=1, size=12), axis.text.y=element_text(size=12))  + 
+   geom_text(data = subset(CGI_norm, fold_change >= 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 0, size=4) +
+    geom_text(data = subset(CGI_norm, fold_change < 0), 
+      aes(Name, fold_change, group=Genotype, label=sig),
+        position = position_dodge(width=0.9), vjust = 1.5, size=4)
+```
+![CpG island context](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CGI_mC_CMR.png)
+
+## Comparing CMR limma and all-probes limma
+```{r cmr vs all, eval=F}
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/overlap_permute_2way.R')
+
+limma_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+length(limma_WT_all_hits <- limma_WT[limma_WT$threshold==TRUE,"Name"]) #29,333
+length(cmr_WT_hits <- cmr_limma_WT_GFP[cmr_limma_WT_GFP$threshold==TRUE,"name"]) #3,755 CMR probe hits
+length(cmr_WT_hits[cmr_WT_hits %in% limma_WT_all_hits]) #2,271
+overlap_permutation_enrichment(cmr_WT_hits, limma_WT_all_hits, background.probes.1=cmr_limma_WT_GFP$name, background.probes.2=limma_WT$Name, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0; Depletion 1"
+
+limma_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+length(limma_A30P_all_hits <- limma_A30P[limma_A30P$threshold==TRUE,"Name"]) #6529
+length(cmr_A30P_hits <- cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$threshold==TRUE,"name"]) #548
+length(cmr_A30P_hits[cmr_A30P_hits %in% limma_A30P_all_hits]) #291
+overlap_permutation_enrichment(cmr_A30P_hits, limma_A30P_all_hits, background.probes.1=cmr_limma_A30P_GFP$name, background.probes.2=limma_A30P$Name, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0; Depletion 1"
+
+limma_WT_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_06182020.csv")
+length(limma_WT_A30P_all_hits <- limma_WT_A30P[limma_WT_A30P$threshold==TRUE,"Name"]) #9680
+length(cmr_WT_A30P_hits <- cmr_limma_WT_A30P[cmr_limma_WT_A30P$threshold==TRUE,"name"]) #765
+length(cmr_WT_A30P_hits[cmr_WT_A30P_hits %in% limma_WT_A30P_all_hits]) #439
+overlap_permutation_enrichment(cmr_WT_A30P_hits, limma_WT_A30P_all_hits, background.probes.1=cmr_limma_WT_A30P$name, background.probes.2=limma_WT_A30P$Name, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0; Depletion 1"
+```
+
+## Overlap between CMR hits from each comparison
+```{r cmr vs all, eval=F}
+#WT vs GFP & A30P vs GFP
+length(cmr_WT_hits[cmr_WT_hits %in% cmr_A30P_hits]) #417
+
+#WT vs GFP & WT vs A30P
+length(cmr_WT_hits[cmr_WT_hits %in% cmr_WT_A30P_hits]) #622
+
+#A30P vs GFP & WT vs A30P
+length(cmr_A30P_hits[cmr_A30P_hits %in% cmr_WT_A30P_hits]) #58
+
+#WT vs GFP & WT vs A30P & A30P vs GFP
+length(cmr_WT_hits[cmr_WT_hits %in% cmr_WT_A30P_hits & cmr_WT_hits %in% cmr_A30P_hits]) #51
+
+#permutation
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/overlap_permute_3way.R')
+overlap_permutation_3way(cmr_WT_hits, cmr_A30P_hits, cmr_WT_A30P_hits, background.probes=cmr_limma_WT_GFP$name, 10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment Group1-Group2: 0; Depletion Group1-Group2: 1"
+#[1] "Enrichment Group1-Group3: 0; Depletion Group1-Group3: 1"
+#[1] "Enrichment Group2-Group3: 0.1933; Depletion Group2-Group3: 0.8613"
+#[1] "Enrichment Group1-Group2-Group3: 0; Depletion Group1-Group2-Group3: 1"
+```
+
+## Annotating CMRs in a data frame
+```{r}
+#creating a data frame annotating all CMR probes with CMR and coordinate information
+cmrs_anno <- lapply(1:length(CMRs_cor40_pw1K), function(x) { #loop over each chr
+  chr <- names(CMRs_cor40_pw1K)[x]
+  if(length(CMRs_cor40_pw1K[[x]])>0){
+  cmr_list <- lapply(1:length(CMRs_cor40_pw1K[[x]]), function(y) { #loop over each cmr
+    print(paste(chr, " CMR ", y, "/", length(CMRs_cor40_pw1K[[x]]), sep=""))
+    cmr_probes <- unlist(CMRs_cor40_pw1K[[x]][y])
+    coords <- fdat[fdat$TargetID %in% cmr_probes,"MAPINFO"]
+    min <- min(coords)
+    max <- max(coords)
+    cmr_name <- paste(chr, paste(min, max, sep="-"), sep=": ")
+    
+    list_per_probe <- lapply(1:length(cmr_probes), function(z) {
+      probe <- cmr_probes[z]
+      coord <- coords[z]
+      return(list(probe=probe,chr=chr,coord=coord,cmr_start=min,cmr_end=max,cmr_id=cmr_name))
+      })
+    list_per_probe <- as.data.frame(do.call(rbind,list_per_probe))
+    
+    return(list_per_probe) }) #a list where each element is a data frame (per cmr)
+    
+  cmr_df <- as.data.frame(do.call(rbind, cmr_list)) #a data frame for all cmrs in a chromosome
+  
+  return(cmr_df)}
+  
+  })
+cmrs_anno <- as.data.frame(do.call(rbind,cmrs_anno)) #a data frame of all cmrs
+cmrs_anno <- as.data.frame(apply(cmrs_anno, 2, function(x) unlist(x)))
+cmrs_anno[,3:5] <- apply(cmrs_anno[,3:5], 2, function(x) as.integer(x))
+write.csv(cmrs_anno, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/CMRs_mC_anno.csv")
+
+nrow(cmrs_anno) #137,451 probes
+length(unique(cmrs_anno$cmr_id)) #57,941 CMRs
+```
+
+# How many individually significant limma hits belong to CMRs?
+
+### WT vs GFP
+```{r}
+limma_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+length(limma_WT_all_hits <- limma_WT[limma_WT$threshold==TRUE,"Name"]) #29,333
+length(WT_all_and_cmr <- limma_WT_all_hits[limma_WT_all_hits %in% cmrs_anno$probe]) #11,270 (38% of probes)
+limma_WT_cmr <- limma_WT[limma_WT$Name %in% cmrs_anno$probe,]
+cmrs_anno_sub <- cmrs_anno[match(limma_WT_cmr$Name, cmrs_anno$probe),]
+all.equal(cmrs_anno_sub$probe, limma_WT_cmr$Name) #TRUE
+limma_WT_cmr$cmr <- cmrs_anno_sub$cmr_id
+limma_WT_no_cmr <- limma_WT[-which(limma_WT$Name %in% cmrs_anno$probe),]
+limma_WT_no_cmr$cmr <- NA
+limma_WT <- rbind(limma_WT_cmr, limma_WT_no_cmr)
+write.csv(limma_WT, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_cmrannot.csv")
+
+View(limma_WT[grep("GRIK2",limma_WT$GencodeBasicV12_NAME),])
+#5 probes with decreased DNAm in WT are in CMR chr6: 101846707-101846916
+
+SNCA <- limma_WT[grep("SNCA;",limma_WT$GencodeBasicV12_NAME),]
+SNCA[SNCA$threshold==TRUE,c("Name","chr","pos","cmr","threshold","DB","adj.P.Val")]
+#             Name  chr      pos                     cmr threshold          DB    adj.P.Val
+#591    cg06632027 chr4 90757378 chr4: 90757139-90757814      TRUE -0.11627585 3.839089e-07
+#646    cg14346243 chr4 90757452 chr4: 90757139-90757814      TRUE -0.11475367 5.303009e-08
+#951    cg20003494 chr4 90757398 chr4: 90757139-90757814      TRUE -0.10633704 1.063189e-07
+#2541   cg26578617 chr4 90757533 chr4: 90757139-90757814      TRUE -0.08354859 2.955218e-07
+#5413   cg15133208 chr4 90757351 chr4: 90757139-90757814      TRUE -0.06671883 1.268672e-05
+#6338   cg06848047 chr4 90757629 chr4: 90757139-90757814      TRUE -0.06320614 3.273684e-06
+#155155 cg17978223 chr4 90759618                    <NA>      TRUE  0.05059905 2.000581e-02
+
+#6 probes with decreased DNAm in WT are in CMR chr4: 90757139-90757814
+
+#checking CMR EWAS stats
+length(SNCA_cmr_probes <- cmrs_anno[cmrs_anno$cmr_id=="chr4: 90757139-90757814","probe"]) #8 CMR probes
+cmr_limma_WT_GFP[cmr_limma_WT_GFP$name%in%SNCA_cmr_probes,]
+#                 name         DcB cmr_limma_pval cmr_limma_BH threshold DNAm_change
+#cg01966878 cg01966878 -0.08280582   4.640069e-12 9.957415e-10      TRUE    Decrease
+
+#composite beta passes cutoff of 0.05.
+```
+
+### A30P vs GFP
+```{r}
+limma_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+length(limma_A30P_all_hits <- limma_A30P[limma_A30P$threshold==TRUE,"Name"]) #6,529
+length(A30P_all_and_cmr <- limma_A30P_all_hits[limma_A30P_all_hits %in% cmrs_anno$probe]) #2,621 (40% of probes)
+limma_A30P_cmr <- limma_A30P[limma_A30P$Name %in% cmrs_anno$probe,]
+cmrs_anno_sub <- cmrs_anno[match(limma_A30P_cmr$Name, cmrs_anno$probe),]
+all.equal(cmrs_anno_sub$probe, limma_A30P_cmr$Name) #TRUE
+limma_A30P_cmr$cmr <- cmrs_anno_sub$cmr_id
+limma_A30P_no_cmr <- limma_A30P[-which(limma_A30P$Name %in% cmrs_anno$probe),]
+limma_A30P_no_cmr$cmr <- NA
+limma_A30P <- rbind(limma_A30P_cmr, limma_A30P_no_cmr)
+write.csv(limma_A30P, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_cmrannot.csv")
+
+View(limma_WT[grep("GRIK2",limma_WT$GencodeBasicV12_NAME),])
+#1 probe with decreased DNAm in A30P is in CMR chr6: 101846707-101846916
+
+View(limma_A30P[grep("SNCA;",limma_A30P$GencodeBasicV12_NAME),])
+#2 probes with decreased DNAm in WT are in CMR chr4: 90757139-90757814
+
+SNCA <- limma_A30P[grep("SNCA;",limma_A30P$GencodeBasicV12_NAME),]
+SNCA[SNCA$threshold==TRUE,c("Name","chr","pos","cmr","threshold","DB","adj.P.Val")]
+#           Name  chr      pos                     cmr threshold          DB   adj.P.Val
+#2404 cg06632027 chr4 90757378 chr4: 90757139-90757814      TRUE -0.05183528 0.016926125
+#2574 cg14346243 chr4 90757452 chr4: 90757139-90757814      TRUE -0.05085233 0.006375477
+
+#2 probes with decreased DNAm in A30P are in CMR chr4: 90757139-90757814
+
+#checking CMR EWAS stats
+length(SNCA_cmr_probes <- cmrs_anno[cmrs_anno$cmr_id=="chr4: 90757139-90757814","probe"]) #8 CMR probes
+cmr_limma_A30P_GFP[cmr_limma_A30P_GFP$name%in%SNCA_cmr_probes,]
+#                 name        DcB cmr_limma_pval cmr_limma_BH threshold DNAm_change
+#cg01966878 cg01966878 -0.0315377   0.0002098877  0.002892746     FALSE          NS
+
+#composite beta is just below cutoff of 0.05.
+```
+
+### A30P vs WT
+```{r}
+limma_WT_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_06182020.csv")
+length(limma_WT_A30P_all_hits <- limma_WT_A30P[limma_WT_A30P$threshold==TRUE,"Name"]) #9,680
+length(A30P_all_and_cmr <- limma_WT_A30P_all_hits[limma_WT_A30P_all_hits %in% cmrs_anno$probe]) #3,809 (39% of probes)
+limma_WT_A30P_cmr <- limma_WT_A30P[limma_WT_A30P$Name %in% cmrs_anno$probe,]
+cmrs_anno_sub <- cmrs_anno[match(limma_WT_A30P_cmr$Name, cmrs_anno$probe),]
+all.equal(cmrs_anno_sub$probe, limma_WT_A30P_cmr$Name) #TRUE
+limma_WT_A30P_cmr$cmr <- cmrs_anno_sub$cmr_id
+limma_WT_A30P_no_cmr <- limma_WT_A30P[-which(limma_WT_A30P$Name %in% cmrs_anno$probe),]
+limma_WT_A30P_no_cmr$cmr <- NA
+limma_WT_A30P <- rbind(limma_WT_A30P_cmr, limma_WT_A30P_no_cmr)
+write.csv(limma_WT_A30P, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_cmrannot.csv")
+```

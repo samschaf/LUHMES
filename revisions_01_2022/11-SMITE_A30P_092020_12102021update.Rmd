@@ -1,0 +1,477 @@
+DecipherPD LUHMES EPIC Array Runs - Methylation and Expression Network Analysis
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: Sept 30, 2020
+
+This project investigates the impact of alpha-synuclein genotype on DNA methylation and hydroxymethylation in human dopaminergic neurons, as part of the DecipherPD grant. The model used was Lund human mesencephalic (LUHMES) cells, a fetal midbrain cell line, that were differentiated into dopaminergic neurons.
+
+Tiago Outerio's group (Gottingen, Germany) created LUHMES overexpressing wild type or A30P mutant human alpha-synuclein (SNCA) as well as GFP. DNA was extracted from 7 replicates of control cells, 8 replicates of SNCA-overexpressing (SNCA-OE) cells, and 8 replicates of A30P cells. Each sample was split into two for bisulfite and oxidative bisulfite conversion, and these were run on the EPIC array. DNA methylation was caluclated using the oxidative bisulfite-converted samples, while DNA hydroxymethylation was calculated by subtracting the oxidative bisulfite-converted beta values (mC) from the bisulfite-converted beta values (hmC + mC).
+
+This script uses differential methylation and differential expression data comparing SNCA-OE and control cells. Using the Significance-based Modules Integrating the Transcriptome and Epigenome (SMITE) package (Wijetunga et al, 2017), I will create an object to store the methylation and expression data.
+
+This object will be analyzed using the SMITE workflow and annotating gene scores to a protein-protein network.
+
+#### Update Dec 8, 2021
+Reviewer asked about how different weighting of each modification in the SMITE analysis would affect results, particularly whether modules are more driven by expression vs DNAm, and why DNAhm was given almost the same weight as DNAm.
+
+#Libraries and functions
+```{r libraries, eval=F}
+setwd("~/")
+options(stringsAsFactors = FALSE)
+library(SMITE)
+library(dplyr)
+library(hexbin)
+library(biomaRt)
+library(igraph)
+library(Rsamtools)
+library(reshape2)
+library(ggplot2)
+source("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/plotModule2.R") #I altered the plotModule function included in the SMITE package ("plotModule2.R") after I noticed the original function was a bit misleading. It was set to plot any DNAm value of 1 as "high", anything significant other than 1 as "low", and anything non-significant as "medium." So I tweaked some parameters to plot any delta beta < 0 as "Hypo" for hypomethylated, and any delta beta > 0 as "Hyper" for hypermethylated. I also renamed the "medium" to "NS" for non-significant in both the DNAm and expression categories.
+source("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/annotateModification2.R") #This fixes a bracket typo in a conditional loop (line 106) where if there is only one CpG sites per methylation feature, the effect for that feature should be returned (instead of attempting to weight the effect, which returns NA). Also added a condition where if all the p-values for a feature are 1, they will be replaced with 0.9999999999. Otherwise if all p-values are 1, all weights will be 0, resulting in NA for the weighted effect.
+```
+
+#Load and curate DNA methylation data
+The output dataframe should have each row representing one CpG site with columns containing chromosome, start, stop, effect size (delta beta), and adjusted p-value (FDR) in that order.
+
+*For site-specific data, start/stop are the same (CpG position).
+```{r DNAm data, eval=F}
+#Load DNA methylation data - data frame containing chr, start, stop, effect size (delta beta), and adjusted p-value (FDR)
+A30P_DMPs <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+
+methylation <- A30P_DMPs[,c("chr", "pos", "pos", "DB", "adj.P.Val")]
+colnames(methylation)[2:3] <- c("start", "stop")
+
+#Remove NAs and pvals == 0 (replace with minimum pval)
+#Replace p-values
+zeros <- methylation %>% filter(adj.P.Val == 0)
+nrow(zeros) #0 - no zero pvals
+#Remove NAs
+methylation <- methylation[complete.cases(methylation$adj.P.Val),]
+
+#Save
+save(methylation, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/methylation_A30P_06232020.RData")
+```
+
+#Load and curate RNA-seq data
+The output dataframe should have gene names as rownames, effect size (log2FC) in the first column, and p-value in the second column.
+```{r RNAseq, eval=F}
+expression <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_A30P.csv", sep=",", skip=1)
+#Remove values without a gene symbol
+expression <- expression[complete.cases(expression$gene_name),]
+#Replace zero p-values
+min(expression$padj) # 0
+min_padj <- min(expression[expression$padj>0,]$padj)
+expression[expression$padj==0,]$padj <- min_padj
+summary(expression$padj) #all pvals are >0, maximum 1
+
+#Subset to relevant columns
+expression <- expression[-which(duplicated(expression$gene_name)), ]
+rownames(expression) <- expression$gene_name
+expression <- expression[,c("log2FoldChange", "padj")]
+save(expression, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/expression_A30P.RData")
+```
+
+#Load bed file - expression
+Since the RNA-seq is annotated with Ensembl, we will use Ensembl gene annotations from hg19. The BED file can be exported from the UCSC genome table browser (http://genome.ucsc.edu/cgi-bin/hgTables); here it was saved as "hg19_genes" before opening in R.
+```{r bed file, eval=F}
+#hg19_bed <- read.table("hg19_genes",header = FALSE, sep="\t",stringsAsFactors=FALSE, quote="")
+
+#Need to convert Ensemble transcripts to genes
+#Use the biomaRt package
+#my_mart = useMart("ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl", host="www.ensembl.org")
+#hg19_genes <- getBM(c("ensembl_gene_id", "ensembl_transcript_id", "hgnc_symbol"), filters="ensembl_transcript_id", values=hg19_bed[,4], mart= my_mart)
+#hg19_genes <- hg19_genes[-which(duplicated(hg19_genes$ensembl_transcript_id)), ]
+
+#nrow(hg19_genes) #189723
+#nrow(hg19_bed) #204940
+#hg19_bed <- hg19_bed[(hg19_bed[,4] %in% hg19_genes$ensembl_transcript_id),] #subset to genes/transcripts with available annotations
+#hg19_bed <- hg19_bed %>% arrange(V4)
+#hg19_genes <- hg19_genes %>% arrange(ensembl_transcript_id)
+#identical(hg19_genes$ensembl_transcript_id, hg19_bed$V4) #TRUE
+#hg19_bed[,4] <- hg19_genes$hgnc_symbol #Replace transcript ID with gene ID
+#save(hg19_bed, file="hg19_bed.RData")
+
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/hg19_bed.RData")
+```
+
+#Load bed file - H3K4me1 (enhancer track)
+Additonal parameters other than DNA methylation and expression are optional inputs to SMITE. Here, I used H3K4me1 ChIP-seq data to represent enhancers.
+
+LUHMES ChIP-seq was performed by Zinah Wassouf (Outeiro lab, University of Goettingen/DZNE, Goettigen, Germany).
+
+Ensure the output dataframe contains chromosome, start, and stop in columns 1-3, respectively.
+```{r enhancer, eval=F}
+enhancer <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/ChIPseq/H3K4me1/Peaks_H3K4me1_Consensus.csv")
+
+#use enhancers from GFP group
+#0 indicates no evidence for enhancers; remove rows with a scores of 0 in GFP
+enhancer <- enhancer[enhancer$GFP>0,]
+```
+
+#Integrate data
+Note: check the help functions for annotations to ensure input data frames are structured correctly (the vignette does not make this clear).
+```{r integrate data, eval=F}
+#Load in hydroxymethylation data
+A30P_DHMPs <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+
+hydroxymethylation <- A30P_DHMPs[,c("chr", "pos", "pos", "DB", "adj.P.Val")]
+colnames(hydroxymethylation)[2:3] <- c("start", "stop")
+summary(hydroxymethylation$adj.P.Val)
+
+#Create PvalueAnnotation
+#"other_tss_distance" argument can take unique values for each type of "other_data"; left to default 10,000 bp due to heterogeneity
+#This considers promoters +/- 1000 bp from TSS, genes bodies +1000bp from TSS - TES, and enhancers +/- 5000bo from H3K4me1 peaks
+LUHMES_annotation <- makePvalueAnnotation(data = hg19_bed, other_data=list(enhancer=enhancer), gene_name_col = 4, promoter_upstream_distance = 1000, promoter_downstream_distance = 1000, other_tss_distance = 5000)
+
+#Load in expression data
+LUHMES_annotation <- annotateExpression(pvalue_annotation = LUHMES_annotation, expr_data = expression, effect_col = 1, pval_col = 2)
+
+#Load in methylation data
+#Weighted by pvalue
+LUHMES_annotation <- annotateModification2(LUHMES_annotation, methylation, weight_by_method = "Stouffer", weight_by = c(promoter = "pval", body = "pval", enhancer="pval"), verbose = TRUE, mod_corr = FALSE, mod_type = "methylation")
+
+#Load in hydroxy data
+LUHMES_annotation <- annotateModification2(LUHMES_annotation, hydroxymethylation, weight_by_method = "Stouffer", weight_by = c(promoter = "pval", body = "pval", enhancer="pval"), verbose = TRUE, mod_corr = FALSE, mod_type = "hydroxy")
+
+#View loaded data
+head(extractExpression(LUHMES_annotation))
+extractModification(LUHMES_annotation, mod_type = "methylation")
+head(extractModSummary(LUHMES_annotation))
+```
+
+#Adjusting values and scoring
+```{r adjust and score, eval=F}
+#Create a PvalueObject (combines all data)
+#Specify effect directions for each modification-context pairing; opposite directions will be penalized
+LUHMES_annotation <- makePvalueObject(pvalue_annotation= LUHMES_annotation, effect_directions = c(methylation_promoter = "bidirectional", methylation_body = "bidirectional", methylation_enhancer="bidirectional", hydroxy_promoter="bidirectional", hydroxy_body="bidirectional", hydroxy_enhancer="bidirectional"))
+
+#Plot density of p-values
+png("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/plotDensityPval_A30P_092020.png")
+plotDensityPval(pvalue_annotation = LUHMES_annotation, ref = "expression_pvalue")
+dev.off()
+```
+![A30P raw p-value densities](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/plotDensityPval_A30P_092020.png)
+
+#Normalization
+Creating the PvalueAnnotation object altered the p-value distibutions for methylation and hydroxymethylation input data as p-values were combined across genomic intervals. Applying a normalization procedure ensures that p-values for each modification have a similar range to each other, so as not to bias which types of modification-context pairings emerge in the modules later on. The "rescale" method first applies a logit transformation, then shifts the p-values within an approximately normal distribution, without affected the relative order of p-values within each modification-context pairing.
+```{r normalize, eval=FALSE}
+LUHMES_annotation_rescaled <- normalizePval(LUHMES_annotation, ref="expression", method="rescale")
+save(LUHMES_annotation_rescaled, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_annotation_rescaled_A30P_122021.RData") #saved 12/2021 when re-running old code, in order to easily come back from this point and try different modification weights
+```
+![A30P rescaled normalized p-value densities](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/normalizePval_rescaled_A30P_092020.png)
+
+#Compare p-values for different features
+These plots are exploratory checks to see if the p-values for different features are correlated with one another. I didn't find anything too interesting here.
+```{r plotCompareScores, eval=F}
+plotCompareScores(LUHMES_annotation_rescaled, x_name="expression", y_name="methylation_promoter")
+plotCompareScores(LUHMES_annotation_rescaled, x_name="expression", y_name="methylation_body")
+plotCompareScores(LUHMES_annotation_rescaled, x_name="expression", y_name="methylation_enhancer")
+plotCompareScores(LUHMES_annotation_rescaled, x_name="expression", y_name="hydroxy_body")
+```
+
+#Weight the features and re-score
+Weights are specified a priori according to experimental context and research questions. Here, promoter/enhancer methylation and expression will be weighted higher, and body methylation will be weighted lower.
+```{r weighting, eval=F}
+#original weights: 0.4 expression, 0.35 methylation, 0.25 hydroxy
+LUHMES_annotation_scored_bidirectional <- scorePval(LUHMES_annotation_rescaled, weights = c(methylation_promoter=0.125, methylation_body=0.1, methylation_enhancer=0.125 , expression=0.4, hydroxy_promoter=0.075, hydroxy_body=0.1, hydroxy_enhancer=0.075))
+save(LUHMES_annotation_scored_bidirectional, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_annotation_scored_bidirectional_A30P_092020.RData")
+
+#approx equal: 0.34 expression, 0.33 methylation, 0.33 hydroxy
+LUHMES_scored_equal <- scorePval(LUHMES_annotation_rescaled, weights = c(methylation_promoter=0.12, methylation_body=0.09, methylation_enhancer=0.12 , expression=0.34, hydroxy_promoter=0.1, hydroxy_body=0.13, hydroxy_enhancer=0.1))
+save(LUHMES_scored_equal, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_equal.RData")
+
+#methylation highest: 0.4 methylation, 0.35 expression, 0.25 hydroxy
+LUHMES_scored_mC <- scorePval(LUHMES_annotation_rescaled, weights = c(methylation_promoter=0.15, methylation_body=0.1, methylation_enhancer=0.15 , expression=0.35, hydroxy_promoter=0.075, hydroxy_body=0.1, hydroxy_enhancer=0.075))
+save(LUHMES_scored_mC, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_mC.RData")
+
+#hydroxy highest: 0.4 hydroxy, 0.35 expression, 0.25 methylation
+LUHMES_scored_hmC <- scorePval(LUHMES_annotation_rescaled, weights = c(methylation_promoter=0.1, methylation_body=0.05, methylation_enhancer=0.1 , expression=0.35, hydroxy_promoter=0.12, hydroxy_body=0.16, hydroxy_enhancer=0.12))
+save(LUHMES_scored_hmC, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_hmC.RData")
+
+#original with equal expression and methylation: 0.4 expression, 0.4 methylation, 0.2 hydroxy
+LUHMES_scored_mC_exp <- scorePval(LUHMES_annotation_rescaled, weights = c(methylation_promoter=0.15, methylation_body=0.1, methylation_enhancer=0.15 , expression=0.4, hydroxy_promoter=0.06, hydroxy_body=0.08, hydroxy_enhancer=0.06))
+save(LUHMES_scored_mC_exp, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_mC_exp.RData")
+```
+
+#Visualize modules
+NOTE: The runSpinglass function has caused my RStudio session on the koborlab-hpc servers to freeze in the past. I recommend running that function in Terminal where it won't crash, then loading the object back into RStudio for plotting.
+```{r visualize modules, eval=F}
+#######To run in Terminal - 1
+library(SMITE)
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_equal.RData")
+
+#load REACTOME interactome
+load(system.file("data", "Reactome.Symbol.Igraph.rda", package = "SMITE"))
+
+#Run spin-glass algorithm to determine best modules
+LUHMES_spinglass_equal <- runSpinglass(LUHMES_scored_equal, network = REACTOME, maxsize = 50, num_iterations = 1000, random_alpha=0.05, node_alpha=0.05)
+save(LUHMES_spinglass_equal, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_equal.RData")
+###########################
+
+#######To run in Terminal - 2
+library(SMITE)
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_mC.RData")
+
+#load REACTOME interactome
+load(system.file("data", "Reactome.Symbol.Igraph.rda", package = "SMITE"))
+
+#Run spin-glass algorithm to determine best modules
+LUHMES_spinglass_mC <- runSpinglass(LUHMES_scored_mC, network = REACTOME, maxsize = 50, num_iterations = 1000, random_alpha=0.05, node_alpha=0.05)
+save(LUHMES_spinglass_mC, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_mC.RData")
+###########################
+
+#######To run in Terminal - 3
+library(SMITE)
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_hmC.RData")
+
+#load REACTOME interactome
+load(system.file("data", "Reactome.Symbol.Igraph.rda", package = "SMITE"))
+
+#Run spin-glass algorithm to determine best modules
+LUHMES_spinglass_hmC <- runSpinglass(LUHMES_scored_hmC, network = REACTOME, maxsize = 50, num_iterations = 1000, random_alpha=0.05, node_alpha=0.05)
+save(LUHMES_spinglass_hmC, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_hmC.RData")
+###########################
+
+#######To run in Terminal - 4
+library(SMITE)
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_scored_mC_exp.RData")
+
+#load REACTOME interactome
+load(system.file("data", "Reactome.Symbol.Igraph.rda", package = "SMITE"))
+
+#Run spin-glass algorithm to determine best modules
+LUHMES_spinglass_mC_exp <- runSpinglass(LUHMES_scored_mC_exp, network = REACTOME, maxsize = 50, num_iterations = 1000, random_alpha=0.05, node_alpha=0.05)
+save(LUHMES_spinglass_mC_exp, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_mC_exp.RData")
+###########################
+```
+
+##Extracting detailed module information
+
+### Equal weighted
+```{r}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_equal.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_mC.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_hmC.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_A30P_spinglass_mC_exp.RData")
+
+pval_df <- LUHMES_spinglass_equal@score_data@pval_data
+genes <- LUHMES_spinglass_equal@score_data@genes
+rownames(pval_df) <- genes
+
+#getting only genes from significant modules
+modules <- LUHMES_spinglass_equal@score_data@module_output$modules
+sig_genes <- unique(unlist(modules)) #351 genes
+pval_df_sub <- pval_df[rownames(pval_df) %in% sig_genes,]
+
+#annotating modules
+pval_df_sub$gene <- rownames(pval_df_sub)
+pval_df_sub$module <- NA
+pval_df_sub$module <- sapply(1:nrow(pval_df_sub), function(x) names(modules[grep(pval_df_sub$gene[x],modules)]))
+#some genes belong to multiple modules - fix this
+pval_df_sub$num_modules <- sapply(1:nrow(pval_df_sub), function(x) length(unlist(pval_df_sub$module[x])))
+nrow(pval_df_sub[pval_df_sub$num_modules>1,]) #118 genes belong to multiple modules
+
+#categorical variable summarizing sig/non-sig categories
+pval_df_summary <- pval_df_sub[,1:8]
+
+pval_df_summary$DNAm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_promoter_pvalue),"DNAm_promoter"] <- "<=0.05"
+pval_df_summary$DNAm_body <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_body_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_body_pvalue),"DNAm_body"] <- "<=0.05"
+pval_df_summary$DNAm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_enhancer_pvalue),"DNAm_enhancer"] <- "<=0.05"
+
+pval_df_summary$DNAhm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_promoter_pvalue),"DNAhm_promoter"] <- "<=0.05"
+pval_df_summary$DNAhm_body <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_body_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_body_pvalue),"DNAhm_body"] <- "<=0.05"
+pval_df_summary$DNAhm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_enhancer_pvalue),"DNAhm_enhancer"] <- "<=0.05"
+
+pval_df_summary$Expression <- ">0.05"
+pval_df_summary[pval_df_summary$expression_pvalue<=0.05 & complete.cases(pval_df_summary$expression_pvalue),"Expression"] <- "<=0.05"
+
+unlist(apply(pval_df_summary[,9:15], 2, function(x) summary(as.factor(x))))
+#DNAm prom: 8 genes
+#DNAm body: 19 genes
+#DNAm enhancer: 5 genes
+#DNAhm promoter: 10 genes
+#DNAhm body: 10 genes
+#DNAhm enhancer: 5 genes
+#Expression: 159 genes
+
+sig_genes <- unique(unlist(apply(pval_df_summary[,9:15], 2, function(x) grep("<=0.05",x))))
+nrow(pval_df_summary_sig <- pval_df_summary[sig_genes,]) #451
+
+pval_df_melt <- melt(pval_df_summary_sig[,8:15], id.vars="gene")
+ggplot(pval_df_melt, aes(x=value, fill=value)) + geom_bar(stat="count", show.legend=FALSE, col="black") + facet_wrap(~variable) + theme_classic() + ylab("Number of Genes") + xlab("P-value") + scale_fill_manual(values=c("blue","grey")) + geom_text(stat="count", aes(label = after_stat(count)), vjust=-0.5, size=3.5) + ylim(c(0,500)) + ggtitle("Significant A30P aSyn Module Genes")
+```
+![Summary of significant SMITE module genes, equal-weighted model](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SMITE_A30P_equal.png)
+
+### mC weighted
+```{r}
+pval_df <- LUHMES_spinglass_mC@score_data@pval_data
+genes <- LUHMES_spinglass_mC@score_data@genes
+rownames(pval_df) <- genes
+
+#getting only genes from significant modules
+modules <- LUHMES_spinglass_mC@score_data@module_output$modules
+sig_genes <- unique(unlist(modules)) #351 genes
+pval_df_sub <- pval_df[rownames(pval_df) %in% sig_genes,]
+
+#annotating modules
+pval_df_sub$gene <- rownames(pval_df_sub)
+pval_df_sub$module <- NA
+pval_df_sub$module <- sapply(1:nrow(pval_df_sub), function(x) names(modules[grep(pval_df_sub$gene[x],modules)]))
+#some genes belong to multiple modules - fix this
+pval_df_sub$num_modules <- sapply(1:nrow(pval_df_sub), function(x) length(unlist(pval_df_sub$module[x])))
+nrow(pval_df_sub[pval_df_sub$num_modules>1,]) #118 genes belong to multiple modules
+
+#categorical variable summarizing sig/non-sig categories
+pval_df_summary <- pval_df_sub[,1:8]
+
+pval_df_summary$DNAm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_promoter_pvalue),"DNAm_promoter"] <- "<=0.05"
+pval_df_summary$DNAm_body <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_body_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_body_pvalue),"DNAm_body"] <- "<=0.05"
+pval_df_summary$DNAm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_enhancer_pvalue),"DNAm_enhancer"] <- "<=0.05"
+
+pval_df_summary$DNAhm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_promoter_pvalue),"DNAhm_promoter"] <- "<=0.05"
+pval_df_summary$DNAhm_body <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_body_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_body_pvalue),"DNAhm_body"] <- "<=0.05"
+pval_df_summary$DNAhm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_enhancer_pvalue),"DNAhm_enhancer"] <- "<=0.05"
+
+pval_df_summary$Expression <- ">0.05"
+pval_df_summary[pval_df_summary$expression_pvalue<=0.05 & complete.cases(pval_df_summary$expression_pvalue),"Expression"] <- "<=0.05"
+
+unlist(apply(pval_df_summary[,9:15], 2, function(x) summary(as.factor(x))))
+#DNAm prom: 3 genes
+#DNAm body: 20 genes
+#DNAm enhancer: 4 genes
+#DNAhm promoter: 5 genes
+#DNAhm body: 11 genes
+#DNAhm enhancer: 5 genes
+#Expression: 185 genes
+
+sig_genes <- unique(unlist(apply(pval_df_summary[,9:15], 2, function(x) grep("<=0.05",x))))
+nrow(pval_df_summary_sig <- pval_df_summary[sig_genes,]) #527
+
+pval_df_melt <- melt(pval_df_summary_sig[,8:15], id.vars="gene")
+ggplot(pval_df_melt, aes(x=value, fill=value)) + geom_bar(stat="count", show.legend=FALSE, col="black") + facet_wrap(~variable) + theme_classic() + ylab("Number of Genes") + xlab("P-value") + scale_fill_manual(values=c("blue","grey")) + geom_text(stat="count", aes(label = after_stat(count)), vjust=-0.5, size=3.5) + ylim(c(0,600)) + ggtitle("Significant A30P aSyn Module Genes")
+```
+![Summary of significant SMITE module genes, mC-weighted model](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SMITE_A30P_mC.png)
+### hmC weighted
+```{r}
+pval_df <- LUHMES_spinglass_hmC@score_data@pval_data
+genes <- LUHMES_spinglass_hmC@score_data@genes
+rownames(pval_df) <- genes
+
+#getting only genes from significant modules
+modules <- LUHMES_spinglass_hmC@score_data@module_output$modules
+sig_genes <- unique(unlist(modules)) #351 genes
+pval_df_sub <- pval_df[rownames(pval_df) %in% sig_genes,]
+
+#annotating modules
+pval_df_sub$gene <- rownames(pval_df_sub)
+pval_df_sub$module <- NA
+pval_df_sub$module <- sapply(1:nrow(pval_df_sub), function(x) names(modules[grep(pval_df_sub$gene[x],modules)]))
+#some genes belong to multiple modules - fix this
+pval_df_sub$num_modules <- sapply(1:nrow(pval_df_sub), function(x) length(unlist(pval_df_sub$module[x])))
+nrow(pval_df_sub[pval_df_sub$num_modules>1,]) #118 genes belong to multiple modules
+
+#categorical variable summarizing sig/non-sig categories
+pval_df_summary <- pval_df_sub[,1:8]
+
+pval_df_summary$DNAm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_promoter_pvalue),"DNAm_promoter"] <- "<=0.05"
+pval_df_summary$DNAm_body <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_body_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_body_pvalue),"DNAm_body"] <- "<=0.05"
+pval_df_summary$DNAm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_enhancer_pvalue),"DNAm_enhancer"] <- "<=0.05"
+
+pval_df_summary$DNAhm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_promoter_pvalue),"DNAhm_promoter"] <- "<=0.05"
+pval_df_summary$DNAhm_body <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_body_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_body_pvalue),"DNAhm_body"] <- "<=0.05"
+pval_df_summary$DNAhm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_enhancer_pvalue),"DNAhm_enhancer"] <- "<=0.05"
+
+pval_df_summary$Expression <- ">0.05"
+pval_df_summary[pval_df_summary$expression_pvalue<=0.05 & complete.cases(pval_df_summary$expression_pvalue),"Expression"] <- "<=0.05"
+
+unlist(apply(pval_df_summary[,9:15], 2, function(x) summary(as.factor(x))))
+#DNAm prom: 8 genes
+#DNAm body: 21 genes
+#DNAm enhancer: 6 genes
+#DNAhm promoter: 5 genes
+#DNAhm body: 11 genes
+#DNAhm enhancer: 5 genes
+#Expression: 171 genes
+
+sig_genes <- unique(unlist(apply(pval_df_summary[,9:15], 2, function(x) grep("<=0.05",x))))
+nrow(pval_df_summary_sig <- pval_df_summary[sig_genes,]) #202
+
+pval_df_melt <- melt(pval_df_summary_sig[,8:15], id.vars="gene")
+ggplot(pval_df_melt, aes(x=value, fill=value)) + geom_bar(stat="count", show.legend=FALSE, col="black") + facet_wrap(~variable) + theme_classic() + ylab("Number of Genes") + xlab("P-value") + scale_fill_manual(values=c("blue","grey")) + geom_text(stat="count", aes(label = after_stat(count)), vjust=-0.5, size=3.5) + ylim(c(0,220)) + ggtitle("Significant A30P aSyn Module Genes")
+```
+![Summary of significant SMITE module genes, hmC-weighted model](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SMITE_A30P_hmC.png)
+
+### mC_exp weighted
+```{r}
+pval_df <- LUHMES_spinglass_mC_exp@score_data@pval_data
+genes <- LUHMES_spinglass_mC_exp@score_data@genes
+rownames(pval_df) <- genes
+
+#getting only genes from significant modules
+modules <- LUHMES_spinglass_mC_exp@score_data@module_output$modules
+sig_genes <- unique(unlist(modules)) #351 genes
+pval_df_sub <- pval_df[rownames(pval_df) %in% sig_genes,]
+
+#annotating modules
+pval_df_sub$gene <- rownames(pval_df_sub)
+pval_df_sub$module <- NA
+pval_df_sub$module <- sapply(1:nrow(pval_df_sub), function(x) names(modules[grep(pval_df_sub$gene[x],modules)]))
+#some genes belong to multiple modules - fix this
+pval_df_sub$num_modules <- sapply(1:nrow(pval_df_sub), function(x) length(unlist(pval_df_sub$module[x])))
+nrow(pval_df_sub[pval_df_sub$num_modules>1,]) #118 genes belong to multiple modules
+
+#categorical variable summarizing sig/non-sig categories
+pval_df_summary <- pval_df_sub[,1:8]
+
+pval_df_summary$DNAm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_promoter_pvalue),"DNAm_promoter"] <- "<=0.05"
+pval_df_summary$DNAm_body <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_body_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_body_pvalue),"DNAm_body"] <- "<=0.05"
+pval_df_summary$DNAm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$methylation_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$methylation_enhancer_pvalue),"DNAm_enhancer"] <- "<=0.05"
+
+pval_df_summary$DNAhm_promoter <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_promoter_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_promoter_pvalue),"DNAhm_promoter"] <- "<=0.05"
+pval_df_summary$DNAhm_body <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_body_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_body_pvalue),"DNAhm_body"] <- "<=0.05"
+pval_df_summary$DNAhm_enhancer <- ">0.05"
+pval_df_summary[pval_df_summary$hydroxy_enhancer_pvalue<=0.05 & complete.cases(pval_df_summary$hydroxy_enhancer_pvalue),"DNAhm_enhancer"] <- "<=0.05"
+
+pval_df_summary$Expression <- ">0.05"
+pval_df_summary[pval_df_summary$expression_pvalue<=0.05 & complete.cases(pval_df_summary$expression_pvalue),"Expression"] <- "<=0.05"
+
+unlist(apply(pval_df_summary[,9:15], 2, function(x) summary(as.factor(x))))
+#DNAm prom: 8 genes
+#DNAm body: 22 genes
+#DNAm enhancer: 6 genes
+#DNAhm promoter: 3 genes
+#DNAhm body: 11 genes
+#DNAhm enhancer: 4 gene
+#Expression: 188 genes
+
+sig_genes <- unique(unlist(apply(pval_df_summary[,9:15], 2, function(x) grep("<=0.05",x))))
+nrow(pval_df_summary_sig <- pval_df_summary[sig_genes,]) #541
+
+pval_df_melt <- melt(pval_df_summary_sig[,8:15], id.vars="gene")
+ggplot(pval_df_melt, aes(x=value, fill=value)) + geom_bar(stat="count", show.legend=FALSE, col="black") + facet_wrap(~variable) + theme_classic() + ylab("Number of Genes") + xlab("P-value") + scale_fill_manual(values=c("blue","grey")) + geom_text(stat="count", aes(label = after_stat(count)), vjust=-0.5, size=3.5) + ylim(c(0,600)) + ggtitle("Significant A30P aSyn Module Genes")
+```
+![Summary of significant SMITE module genes, mC_exp-weighted model](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SMITE_A30P_mC_expr.png)

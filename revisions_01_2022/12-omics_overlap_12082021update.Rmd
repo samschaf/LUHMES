@@ -1,0 +1,725 @@
+DecipherPD LUHMES EPIC Array Runs - Methylation and Expression Comparison
+================================
+
+##### Analyst: Samantha Schaffner
+##### Date: Nov 2, 2020
+
+This project investigates the impact of alpha-synuclein genotype on DNA methylation and hydroxymethylation in human dopaminergic neurons, as part of the DecipherPD grant. The model used was Lund human mesencephalic (LUHMES) cells, a fetal midbrain cell line, that were differentiated into dopaminergic neurons.
+
+Tiago Outerio's group (Gottingen, Germany) created LUHMES overexpressing wild type or WT mutant human alpha-synuclein (SNCA) as well as GFP. DNA was extracted from 7 replicates of control cells, 8 replicates of SNCA-overexpressing (SNCA-OE) cells, and 8 replicates of WT cells. Each sample was split into two for bisulfite and oxidative bisulfite conversion, and these were run on the EPIC array. DNA methylation was caluclated using the oxidative bisulfite-converted samples, while DNA hydroxymethylation was calculated by subtracting the oxidative bisulfite-converted beta values (mC) from the bisulfite-converted beta values (hmC + mC).
+
+In this script, I will overlap hits discovered in DNAm/DNAhm analysis with hits in gene expression analysis.
+
+#### Update Dec 8, 2021
+Per reviewer suggestion, altered the SNCA figure to expand the coordinates to the full length of all transcripts.
+
+#Libraries and functions
+```{r libraries, eval=F}
+setwd("~/")
+options(stringsAsFactors = FALSE)
+library(biomaRt)
+library(SMITE)
+library(dplyr)
+library(methylumi)
+library(lumi)
+library(ggplot2)
+library(DescTools)
+```
+
+#Read in DNAm and DNAhm data
+```{r DNAm DNAhm, eval=F}
+DMPs_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_06182020.csv")
+DMPs_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_A30P_06182020.csv")
+DHMPs_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_06182020.csv")
+DHMPs_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_A30P_06182020.csv")
+DMPs_WT_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DMPs_WT_A30P_06182020.csv")
+DHMPs_WT_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DHMPs_WT_A30P_06192020.csv")
+```
+
+#Read in RNAseq data
+```{r RNAseq, eval=F}
+RNA_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_WT.csv", skip=1)
+
+RNA_WT <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Table S1.csv", skip=1)
+
+library(readxl)
+RNA_WT <- read_excel("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Table S1.xlsx", skip=1)
+
+RNA_A30P <- read.csv("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/Paiva_RNAseq_A30P.csv", skip=1)
+```
+
+#Compare hits: WT aSyn
+
+##DNAm and RNA
+```{r compare hits WT, eval=F}
+#DNAm and expression
+#expr: log2FC >= 0.5 and padj <= 0.01
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & RNA_WT$padj<0.01,]) #785 DEGs
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.4 & RNA_WT$padj<0.01,]) #930
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.3 & RNA_WT$padj<0.01,]) #1048
+
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & RNA_WT$padj<0.05,]) #1114
+
+nrow(RNA_hits_WT <- RNA_WT[RNA_WT$padj<0.01,]) #1114
+nrow(RNA_hits_WT <- RNA_WT[RNA_WT$padj<0.05,]) #2019
+
+#excel file
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & RNA_WT$padj<0.01,]) #863
+sum(RNA_WT$log2FoldChange > 0.5 & RNA_WT$padj < 0.01) #291
+sum(RNA_WT$log2FoldChange < -0.5 & RNA_WT$padj < 0.01) #572
+
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.4195 & RNA_WT$padj<0.01,]) #1002
+#is it possible there was a rounding error?
+RNA_WT_sub <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.4 & abs(RNA_WT$log2FoldChange)<=0.5 & RNA_WT$padj<0.01,] #there are 170 genes with log2FC between 0.4 and 0.5
+
+#log2FC rounding
+#original excel file: 4.05507897564801 (14 decimal places)
+#read into R with read_excel: 4.055079 (6 decimal places)
+#filtering on excel for effect size and p-value also returns 863 DEGs
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,5))>0.5 & RNA_WT$padj<0.01,]) #863
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,4))>0.5 & RNA_WT$padj<0.01,]) #863
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,3))>0.5 & RNA_WT$padj<0.01,]) #861
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,2))>0.5 & RNA_WT$padj<0.01,]) #854
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,1))>0.5 & RNA_WT$padj<0.01,]) #767
+#rounding the effect size lowers the number of hits
+
+#padj rounding
+#excel file: 3.05273561425598E-37 (14 decimal places)
+#read into R with read_excel: 1.150646e-237 (6 decimal places)
+#filtering on excel for p-value also returns 1296 DEGs
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & round(RNA_WT$padj,5)<0.01,]) #863
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & round(RNA_WT$padj,4)<0.01,]) #863
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & round(RNA_WT$padj,3)<0.01,]) #856
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & round(RNA_WT$padj,2)<0.01,]) #785
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & round(RNA_WT$padj,1)<0.01,]) #1137
+#rounding p-value also lowers number of hits, unless p is put to a 0/1 binary (1 digit)
+
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,5))>0.5 & round(RNA_WT$padj,5)<0.01,]) #863
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,4))>0.5 & round(RNA_WT$padj,4)<0.01,]) #863
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,3))>0.5 & round(RNA_WT$padj,3)<0.01,]) #854
+nrow(RNA_hits_WT <- RNA_WT[abs(round(RNA_WT$log2FoldChange,2))>0.5 & round(RNA_WT$padj,2)<0.01,]) #777
+
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5,]) #1856
+nrow(RNA_hits_WT <- RNA_WT[RNA_WT$padj<0.00015,]) #1296
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>0.5 & RNA_WT$padj<0.05,]) #1137
+
+RNA_hits_WT$pvalue <- as.numeric(RNA_hits_WT$pvalue)
+nrow(RNA_hits_WT <- RNA_WT[abs(RNA_WT$log2FoldChange)>=0.5 & RNA_WT$pvalue<=0.01,]) #561
+
+#"multi_transcript_df" contains the accession ID for the longest transcript associated with each CpG site that has multiple associated transcripts, but not the gene name (in future, put the gene name into this reference to make things more efficient!). 
+#"transcript_df" contains all possible transcript-cpg pairs (including sites with one associated transcript)
+#merging these first to get a data frame with all sites respresnted once, and their longest transcript
+multi_transcript_df <- read.delim("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/multi_transcript_df_202008.txt")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/transcript_df_062020.RData")
+nrow(transcript_df_single <- transcript_df[-which(transcript_df$site %in% multi_transcript_df$site),]) #515,730
+colnames(multi_transcript_df)[2] <- "acc"
+nrow(master_df <- rbind(multi_transcript_df[,1:2], transcript_df_single[,c(1,3)])) #813,589
+nrow(master_df_hmC <- master_df[master_df$site %in% DHMPs_WT$Name,]) #233,440
+
+#getting total number of genes covered in each dataset
+mart <- useMart("ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl", host="feb2014.archive.ensembl.org",path="/biomart/martservice",archive=FALSE, verbose=TRUE) #hg19
+
+#DNAm
+mrna <- master_df[grep("NM", master_df$acc),]
+ncrna <- master_df[grep("NR", master_df$acc),]
+mC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna$acc, attributes=c("refseq_mrna", "external_gene_id"))
+mC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+length(mC_genes <- unique(c(mC_ncrna_genes$external_gene_id, mC_prot_genes$external_gene_id))) #20,429
+
+#DNAhm
+mrna <- master_df[grep("NM", master_df_hmC$acc),]
+ncrna <- master_df[grep("NR", master_df_hmC$acc),]
+hmC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna$acc, attributes=c("refseq_mrna", "external_gene_id"))
+hmC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+length(hmC_genes <- unique(c(hmC_ncrna_genes$external_gene_id, hmC_prot_genes$external_gene_id))) #14,003
+
+#mRNA
+length(RNA_genes_WT <- unique(RNA_WT$gene_name)) #18,326
+length(RNA_genes_A30P <- unique(RNA_A30P$gene_name)) #18,476
+
+#overlaps
+length(overlap_WT <- RNA_genes_WT[RNA_genes_WT %in% mC_genes & RNA_genes_WT %in% hmC_genes]) #10,798
+length(overlap_A30P <- RNA_genes_A30P[RNA_genes_A30P %in% mC_genes & RNA_genes_A30P %in% hmC_genes]) #10,831
+
+WT_genes <- c(WT_mC_ncrna_genes$external_gene_id, WT_mC_prot_genes$external_gene_id) #14207
+#10177 when re-run 12/14/21
+
+#overlap
+length(DNAm_RNA_WT <- WT_genes[WT_genes %in% RNA_hits_WT$gene_name]) #551
+head(DNAm_RNA_WT)
+
+#annotating all background genes
+mrna_hits <- master_df[grep("NM", master_df$acc),] #16581
+ncrna_hits <- master_df[grep("NR", master_df$acc),] #1457
+
+mart <- useMart("ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl", host="feb2014.archive.ensembl.org",path="/biomart/martservice",archive=FALSE, verbose=TRUE) #hg19
+WT_mC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits$acc, attributes=c("refseq_mrna", "external_gene_id"))
+WT_mC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna_hits$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+
+colnames(WT_mC_prot_genes)[1] <- "acc"
+colnames(WT_mC_ncrna_genes)[1] <- "acc"
+WT_mC_genes_df <- rbind(WT_mC_prot_genes, WT_mC_ncrna_genes)
+length(unique(master_df$acc)) #24,519
+length(unique(WT_mC_genes_df$acc)) #22,572
+master_df <- master_df[master_df$acc %in% WT_mC_genes_df$acc,]
+cpg_to_gene <- sapply(1:nrow(master_df), function(x) {
+  print(x)
+  gene <- unique(WT_mC_genes_df[WT_mC_genes_df$acc==master_df[x,"acc"],"external_gene_id"])
+  if (length(gene)==1){ return(gene) }
+  else { return(gene[1]) }
+  })
+master_df$gene_name <- cpg_to_gene
+write.table(master_df, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/master_df_genenames_mC.txt", sep="\t")
+```
+
+##DNAhm and RNA
+```{r compare hits WT hmC, eval=F}
+#DNAhm
+
+transcript_df_hits_hmC <- master_df_hmC[master_df_hmC$site %in% DHMPs_WT[DHMPs_WT$threshold==TRUE,"Name"],]
+mrna_hits_hmC <- transcript_df_hits_hmC[grep("NM", transcript_df_hits_hmC$acc),] #141
+ncrna_hits_hmC <- transcript_df_hits_hmC[grep("NR", transcript_df_hits_hmC$acc),] #10
+
+WT_hmC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits_hmC$acc, attributes=c("refseq_mrna", "external_gene_id"))
+WT_hmC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna_hits_hmC$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+
+WT_genes <- c(WT_hmC_ncrna_genes$external_gene_id, WT_hmC_prot_genes$external_gene_id) #139
+
+#overlap
+length(DNAhm_RNA_WT <- WT_genes[WT_genes %in% RNA_hits_WT$gene_name]) #8
+DNAhm_RNA_WT
+# "DDR2"   "SGOL2"  "GRIK2"  "WDR76"  "PARP8"  "HDAC9"  "TSPEAR" "NCKAP5"
+
+#All 3 mods
+length(DNAm_DNAhm_RNA_WT <- DNAhm_RNA_WT[DNAhm_RNA_WT %in% DNAm_RNA_WT]) #7
+DNAm_DNAhm_RNA_WT
+#"DDR2"   "GRIK2"  "WDR76"  "PARP8"  "HDAC9"  "TSPEAR" "NCKAP5"
+
+#create a table of these genes
+
+gene_table <- lapply(1:length(DNAm_DNAhm_RNA_WT), function(i){
+
+  #DNAm hits
+  if (length(grep(DNAm_DNAhm_RNA_WT[i], WT_mC_prot_genes$external_gene_id))>0){
+    acc <- WT_mC_prot_genes[grep(DNAm_DNAhm_RNA_WT[i], WT_mC_prot_genes$external_gene_id),"refseq_mrna"]
+    sites <- mrna_hits[mrna_hits$acc%in%acc,"site"]
+  }
+  else if (length(grep(DNAm_DNAhm_RNA_WT[i], WT_mC_ncrna_genes$external_gene_id))>0){
+    acc <- WT_mC_ncRNA_genes[grep(DNAm_DNAhm_RNA_WT[i], WT_mC_ncRNA_genes$external_gene_id),"refseq_ncrna"]
+    sites <- ncrna_hits[ncrna_hits$acc%in%acc,"site"]
+  } 
+  
+  gene_WT_mC <- DMPs_WT[DMPs_WT$Name %in% sites & DMPs_WT$threshold==TRUE,]
+  
+  #gene_WT_mC <- DMPs_WT[grep(DNAm_DNAhm_RNA_WT[i], DMPs_WT$GencodeBasicV12_NAME),]
+  #gene_WT_mC <- rbind(gene_WT_mC, DMPs_WT[grep(DNAm_DNAhm_RNA_WT[i], DMPs_WT$GencodeCompV12_NAME),])
+  #gene_WT_mC <- gene_WT_mC[gene_WT_mC$threshold==TRUE,]
+  gene_WT_mC <- gene_WT_mC[,c("Name","GencodeBasicV12_Group","DB","adj.P.Val")]
+  #gene_WT_mC <- distinct(gene_WT_mC)
+  
+  #DNAhm hits
+   if (length(grep(DNAm_DNAhm_RNA_WT[i], WT_hmC_prot_genes$external_gene_id))>0){
+    acc <- WT_hmC_prot_genes[grep(DNAm_DNAhm_RNA_WT[i], WT_hmC_prot_genes$external_gene_id),"refseq_mrna"]
+    sites <- mrna_hits_hmC[mrna_hits_hmC$acc%in%acc,"site"]
+  }
+  else if (length(grep(DNAm_DNAhm_RNA_WT[i], WT_hmC_ncrna_genes$external_gene_id))>0){
+    acc <- WT_hmC_ncRNA_genes[grep(DNAm_DNAhm_RNA_WT[i], WT_hmC_ncRNA_genes$external_gene_id),"refseq_ncrna"]
+    sites <- ncrna_hits_hmC[ncrna_hits_hmC$acc%in%acc,"site"]
+  } 
+  
+  gene_WT_hmC <- DHMPs_WT[DHMPs_WT$Name %in% sites & DHMPs_WT$threshold==TRUE,]
+  
+  
+  #gene_WT_hmC <- DHMPs_WT[grep(DNAm_DNAhm_RNA_WT[i], DHMPs_WT$GencodeBasicV12_NAME),]
+  #gene_WT_hmC <- rbind(gene_WT_hmC, DHMPs_WT[grep(DNAm_DNAhm_RNA_WT[i], DHMPs_WT$GencodeCompV12_NAME),])
+  #gene_WT_hmC <- gene_WT_hmC[gene_WT_hmC$threshold==TRUE,]
+  gene_WT_hmC <- gene_WT_hmC[,c("Name","GencodeBasicV12_Group","DB","adj.P.Val")]
+  #gene_WT_hmC <- distinct(gene_WT_hmC)
+
+  n <- max(nrow(gene_WT_mC), nrow(gene_WT_hmC))
+
+  #make DNAm and DNAhm the same length
+  if (nrow(gene_WT_mC)<n){
+    to_add = n - nrow(gene_WT_mC)
+    to_add_df <- data.frame(Name=rep(NA,to_add), GencodeBasicV12_Group=rep(NA,to_add), DB=rep(NA,to_add), adj.P.Val=rep(NA, to_add))
+    gene_WT_mC <- rbind(gene_WT_mC, to_add_df)
+  }
+
+  if (nrow(gene_WT_hmC)<n){
+    to_add = n - nrow(gene_WT_hmC)
+    to_add_df <- data.frame(Name=rep(NA,to_add), GencodeBasicV12_Group=rep(NA,to_add), DB=rep(NA,to_add), adj.P.Val=rep(NA, to_add))
+    gene_WT_hmC <- rbind(gene_WT_hmC, to_add_df)
+  }
+
+  #RNAseq
+  gene_RNA <- RNA_WT[RNA_WT$gene_name==DNAm_DNAhm_RNA_WT[i],c("log2FoldChange","padj")]
+
+  #data frame
+  df <- data.frame(gene=c(DNAm_DNAhm_RNA_WT[i], rep(NA, n-1)), mRNA_log2FC=c(gene_RNA$log2FoldChange,rep(NA,n-1)), mRNA_adjP=c(gene_RNA$padj,rep(NA,n-1)), 
+                 DNAm_probe=gene_WT_mC$Name, DNAm_feature=gene_WT_mC$GencodeBasicV12_Group, DNAm_DB=gene_WT_mC$DB, DNAm_adjP=gene_WT_mC$adj.P.Val,
+                 DNAhm_probe=gene_WT_hmC$Name, DNAhm_feature=gene_WT_hmC$GencodeBasicV12_Group, DNAhm_DB=gene_WT_hmC$DB, DNAhm_adjP=gene_WT_hmC$adj.P.Val)
+  
+  return(df)
+
+})
+gene_table <- do.call(rbind, gene_table)
+write.csv(gene_table, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/multi_omic_hits_WT.csv", row.names=F)
+```
+
+When modifications are overlapped, 7 differentially expressed genes are also differentially methylated and hydroxymethylated.
+
+Were these found in SMITE analysis?
+```{r SMITE check, eval=F}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_spinglass_WT_092020.RData")
+length(modules <- extractModules(LUHMES_spinglass)) #18
+length(module_genes <- unique(c(unlist(modules), names(modules)))) #364
+
+DNAm_DNAhm_RNA_WT[DNAm_DNAhm_RNA_WT %in% module_genes]
+#"GRIK2" "HDAC9"
+```
+
+#Compare hits: A30P aSyn
+
+##DNAm and RNA
+```{r compare hits A30P, eval=F}
+#DNAm and expression
+#expr: log2FC >= 0.5 and padj <= 0.01
+nrow(RNA_hits_A30P <- RNA_A30P[abs(RNA_A30P$log2FoldChange)>0.5 & RNA_A30P$padj<0.01,]) #1,315 DEGs
+
+#DNAm
+transcript_df_hits <- master_df[master_df$site %in% DMPs_A30P[DMPs_A30P$threshold==TRUE,"Name"],]
+mrna_hits <- transcript_df_hits[grep("NM", transcript_df_hits$acc),] #3811
+ncrna_hits <- transcript_df_hits[grep("NR", transcript_df_hits$acc),] #314
+
+A30P_mC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits$acc, attributes=c("refseq_mrna", "external_gene_id"))
+A30P_mC_ncrna_genes <- getBM(mart=mart, filters="refseq_ncrna", values=ncrna_hits$acc, attributes=c("refseq_ncrna", "external_gene_id"))
+
+A30P_genes <- c(A30P_mC_ncrna_genes$external_gene_id, A30P_mC_prot_genes$external_gene_id) #3082
+
+#overlap
+length(DNAm_RNA_A30P <- A30P_genes[A30P_genes %in% RNA_hits_A30P$gene_name]) #239
+head(DNAm_RNA_A30P)
+```
+
+##DNAhm and RNA
+```{r compare hits A30P hmC, eval=F}
+#DNAhm
+transcript_df_hits_hmC <- master_df_hmC[master_df_hmC$site %in% DHMPs_A30P[DHMPs_A30P$threshold==TRUE,"Name"],]
+mrna_hits_hmC <- transcript_df_hits_hmC[grep("NM", transcript_df_hits_hmC$acc),] #48
+ncrna_hits_hmC <- transcript_df_hits_hmC[grep("NR", transcript_df_hits_hmC$acc),] #0
+
+A30P_hmC_prot_genes <- getBM(mart=mart, filters="refseq_mrna", values=mrna_hits_hmC$acc, attributes=c("refseq_mrna", "external_gene_id"))
+A30P_genes <- A30P_hmC_prot_genes$external_gene_id #47
+
+#overlap
+length(DNAhm_RNA_A30P <- A30P_genes[A30P_genes %in% RNA_hits_A30P$gene_name]) #2
+DNAhm_RNA_A30P
+#"TSPEAR" "SGPP2" 
+
+#All 3 mods
+length(DNAm_DNAhm_RNA_A30P <- DNAhm_RNA_A30P[DNAhm_RNA_A30P %in% DNAm_RNA_A30P]) #2
+DNAm_DNAhm_RNA_A30P
+#"TSPEAR" "SGPP2" 
+
+#create a table of these genes
+
+gene_table <- lapply(1:length(DNAm_DNAhm_RNA_A30P), function(i){
+
+  #DNAm hits
+  if (length(grep(DNAm_DNAhm_RNA_A30P[i], A30P_mC_prot_genes$external_gene_id))>0){
+    acc <- A30P_mC_prot_genes[grep(DNAm_DNAhm_RNA_A30P[i], A30P_mC_prot_genes$external_gene_id),"refseq_mrna"]
+    sites <- mrna_hits[mrna_hits$acc%in%acc,"site"]
+  }
+  else if (length(grep(DNAm_DNAhm_RNA_A30P[i], A30P_mC_ncrna_genes$external_gene_id))>0){
+    acc <- A30P_mC_ncRNA_genes[grep(DNAm_DNAhm_RNA_A30P[i], A30P_mC_ncRNA_genes$external_gene_id),"refseq_ncrna"]
+    sites <- ncrna_hits[ncrna_hits$acc%in%acc,"site"]
+  } 
+  
+  gene_A30P_mC <- DMPs_A30P[DMPs_A30P$Name %in% sites & DMPs_A30P$threshold==TRUE,]
+  
+  #gene_A30P_mC <- DMPs_A30P[grep(DNAm_DNAhm_RNA_A30P[i], DMPs_A30P$GencodeBasicV12_NAME),]
+  #gene_A30P_mC <- rbind(gene_A30P_mC, DMPs_A30P[grep(DNAm_DNAhm_RNA_A30P[i], DMPs_A30P$GencodeCompV12_NAME),])
+  #gene_A30P_mC <- gene_A30P_mC[gene_A30P_mC$threshold==TRUE,]
+  gene_A30P_mC <- gene_A30P_mC[,c("Name","GencodeBasicV12_Group","DB","adj.P.Val")]
+  #gene_A30P_mC <- distinct(gene_A30P_mC)
+  
+  #DNAhm hits
+   if (length(grep(DNAm_DNAhm_RNA_A30P[i], A30P_hmC_prot_genes$external_gene_id))>0){
+    acc <- A30P_hmC_prot_genes[grep(DNAm_DNAhm_RNA_A30P[i], A30P_hmC_prot_genes$external_gene_id),"refseq_mrna"]
+    sites <- mrna_hits_hmC[mrna_hits_hmC$acc%in%acc,"site"]
+  }
+  else if (length(grep(DNAm_DNAhm_RNA_A30P[i], A30P_hmC_ncrna_genes$external_gene_id))>0){
+    acc <- A30P_hmC_ncRNA_genes[grep(DNAm_DNAhm_RNA_A30P[i], A30P_hmC_ncRNA_genes$external_gene_id),"refseq_ncrna"]
+    sites <- ncrna_hits_hmC[ncrna_hits_hmC$acc%in%acc,"site"]
+  } 
+  
+  gene_A30P_hmC <- DHMPs_A30P[DHMPs_A30P$Name %in% sites & DHMPs_A30P$threshold==TRUE,]
+  
+  
+  #gene_A30P_hmC <- DHMPs_A30P[grep(DNAm_DNAhm_RNA_A30P[i], DHMPs_A30P$GencodeBasicV12_NAME),]
+  #gene_A30P_hmC <- rbind(gene_A30P_hmC, DHMPs_A30P[grep(DNAm_DNAhm_RNA_A30P[i], DHMPs_A30P$GencodeCompV12_NAME),])
+  #gene_A30P_hmC <- gene_A30P_hmC[gene_A30P_hmC$threshold==TRUE,]
+  gene_A30P_hmC <- gene_A30P_hmC[,c("Name","GencodeBasicV12_Group","DB","adj.P.Val")]
+  #gene_A30P_hmC <- distinct(gene_A30P_hmC)
+
+  n <- max(nrow(gene_A30P_mC), nrow(gene_A30P_hmC))
+
+  #make DNAm and DNAhm the same length
+  if (nrow(gene_A30P_mC)<n){
+    to_add = n - nrow(gene_A30P_mC)
+    to_add_df <- data.frame(Name=rep(NA,to_add), GencodeBasicV12_Group=rep(NA,to_add), DB=rep(NA,to_add), adj.P.Val=rep(NA, to_add))
+    gene_A30P_mC <- rbind(gene_A30P_mC, to_add_df)
+  }
+
+  if (nrow(gene_A30P_hmC)<n){
+    to_add = n - nrow(gene_A30P_hmC)
+    to_add_df <- data.frame(Name=rep(NA,to_add), GencodeBasicV12_Group=rep(NA,to_add), DB=rep(NA,to_add), adj.P.Val=rep(NA, to_add))
+    gene_A30P_hmC <- rbind(gene_A30P_hmC, to_add_df)
+  }
+
+  #RNAseq
+  gene_RNA <- RNA_A30P[RNA_A30P$gene_name==DNAm_DNAhm_RNA_A30P[i],c("log2FoldChange","padj")]
+
+  #data frame
+  df <- data.frame(gene=c(DNAm_DNAhm_RNA_A30P[i], rep(NA, n-1)), mRNA_log2FC=c(gene_RNA$log2FoldChange,rep(NA,n-1)), mRNA_adjP=c(gene_RNA$padj,rep(NA,n-1)), 
+                 DNAm_probe=gene_A30P_mC$Name, DNAm_feature=gene_A30P_mC$GencodeBasicV12_Group, DNAm_DB=gene_A30P_mC$DB, DNAm_adjP=gene_A30P_mC$adj.P.Val,
+                 DNAhm_probe=gene_A30P_hmC$Name, DNAhm_feature=gene_A30P_hmC$GencodeBasicV12_Group, DNAhm_DB=gene_A30P_hmC$DB, DNAhm_adjP=gene_A30P_hmC$adj.P.Val)
+  
+  return(df)
+
+})
+gene_table <- do.call(rbind, gene_table)
+write.csv(gene_table, file="~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/multi_omic_hits_A30P.csv", row.names=F)
+```
+
+When modifications are overlapped, 2 differentially expressed genes are also differentially methylated and hydroxymethylated.
+
+Were these found in SMITE analysis?
+```{r SMITE check, eval=F}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_spinglass_A30P_092020.RData")
+length(modules <- extractModules(LUHMES_spinglass)) #24
+length(module_genes <- unique(c(unlist(modules), names(modules)))) #564
+
+DNAm_DNAhm_RNA_A30P[DNAm_DNAhm_RNA_A30P %in% module_genes] #"SGPP2"
+```
+
+#DNAm at SNCA
+```{r SNCA, eval=F}
+SNCA <- DMPs_WT[grep("SNCA", DMPs_WT$GencodeBasicV12_NAME),]
+SNCA <- SNCA[-(grep("SNCAIP", SNCA$GencodeBasicV12_NAME)),]
+nrow(SNCA[SNCA$threshold==TRUE,]) #7
+
+SNCA_hmC <- DHMPs_WT[grep("SNCA", DHMPs_WT$GencodeBasicV12_NAME),]
+SNCA_hmC <- SNCA_hmC[-grep("SNCAIP", SNCA_hmC$GencodeBasicV12_NAME),]
+nrow(SNCA_hmC[SNCA_hmC$threshold==TRUE,]) #0
+
+SNCA_A30P <- DMPs_A30P[grep("SNCA", DMPs_A30P$GencodeBasicV12_NAME),]
+SNCA_A30P <- SNCA_A30P[-grep("SNCAIP", SNCA_A30P$GencodeBasicV12_NAME),]
+nrow(SNCA_A30P[SNCA_A30P$threshold==TRUE,]) #2
+
+SNCA_A30P_hmC <- DHMPs_A30P[grep("SNCA", DHMPs_A30P$GencodeBasicV12_NAME),]
+SNCA_A30P_hmC <- SNCA_A30P_hmC[-grep("SNCAIP", SNCA_A30P_hmC$GencodeBasicV12_NAME),]
+nrow(SNCA_A30P_hmC[SNCA_A30P_hmC$threshold==TRUE,]) #0
+
+###SNCA is differentially methylated but not differentially hydroxymethylated
+#Plot SNCA DNAm
+
+#load in methylumi objects for LUHMES DNAm and DNAhm
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_hmC_clean_SS_06182020.RData")
+
+fdat <- fData(mC_methylumi_N)
+SNCA_probes <- fdat[grep("SNCA",fdat$UCSC_REFGENE_NAME),]
+length(SNCA_probes <- SNCA_probes[-grep("SNCAIP", SNCA_probes$UCSC_REFGENE_NAME),"TargetID"]) #40
+
+SNCA_mC <- betas(mC_methylumi_N)
+SNCA_mC <- SNCA_mC[rownames(SNCA_mC) %in% SNCA_probes,]
+
+#UCSC hg19 SNCA coordinates: chr4:90645250-90759447
+#checking whether any additional probes not captured above are present using coordinate-based subsetting
+length(SNCA_coord_probes <- fdat[fdat$CHR==4 & fdat$MAPINFO>=90645250 & fdat$MAPINFO<=90759447,"TargetID"]) #35
+all(SNCA_coord_probes %in% SNCA_probes) #TRUE
+
+#annotate chromosomal position for methylation data
+fdat_sub <- fdat[grep("SNCA",fdat$UCSC_REFGENE_NAME),] 
+fdat_sub <- fdat_sub[-grep("SNCAIP", fdat_sub$UCSC_REFGENE_NAME),]
+all.equal(rownames(fdat_sub), rownames(SNCA_mC)) #TRUE
+SNCA_mC <- as.data.frame(SNCA_mC)
+SNCA_mC$pos <- fdat_sub$MAPINFO
+colnames(SNCA_mC)[1:23] <- c("ctrl1", "WT1", "A30P1", "ctrl2", "WT2", "ctrl3", "A30P2", "A30P3", "A30P4", "WT3", "ctrl4", "WT4", "ctrl5", "WT5", "A30P5", "WT6", "A30P6", "WT7", "ctrl6", "A30P7", "A30P8", "ctrl7", "WT8")
+
+SNCA_hmC <- hmC_betas_matrix_N[rownames(hmC_betas_matrix_N) %in% SNCA_probes,]
+fdat_sub_hmC <- fdat[fdat$TargetID %in% rownames(SNCA_hmC),]
+identical(rownames(fdat_sub_hmC), rownames(SNCA_hmC)) #TRUE
+SNCA_hmC <- as.data.frame(SNCA_hmC)
+SNCA_hmC$pos <- fdat_sub_hmC$MAPINFO
+colnames(SNCA_hmC)[1:23] <- c("ctrl1", "WT1", "A30P1", "ctrl2", "WT2", "ctrl3", "A30P2", "A30P3", "A30P4", "WT3", "ctrl4", "WT4", "ctrl5", "WT5", "A30P5", "WT6", "A30P6", "WT7", "ctrl6", "A30P7", "A30P8", "ctrl7", "WT8")
+
+nrow(mC_only_sites <- SNCA_mC[-which(rownames(SNCA_mC) %in% rownames(SNCA_hmC)),]) #26
+hmC_NA <- data.frame(ctrl1=rep(NA, 26), WT1=rep(NA, 26), A30P1=rep(NA, 26), ctrl2=rep(NA, 26),
+                     WT2=rep(NA, 26), ctrl3=rep(NA, 26), A30P2=rep(NA, 26), A30P3=rep(NA, 26),
+                     A30P4=rep(NA, 26), WT3=rep(NA, 26), ctrl4=rep(NA, 26), WT4=rep(NA, 26),
+                     ctrl5=rep(NA, 26), WT5=rep(NA, 26), A30P5=rep(NA, 26), WT6=rep(NA, 26),
+                     A30P6=rep(NA, 26), WT7=rep(NA, 26), ctrl6=rep(NA, 26), A30P7=rep(NA, 26),
+                     A30P8=rep(NA, 26), ctrl7=rep(NA, 26), WT8=rep(NA, 26), pos=mC_only_sites$pos)
+rownames(hmC_NA) <- rownames(mC_only_sites)
+SNCA_hmC <- rbind(SNCA_hmC, hmC_NA)
+all(rownames(SNCA_hmC) %in% rownames(SNCA_mC)) #TRUE
+SNCA_hmC$cpg <- rownames(SNCA_hmC)
+SNCA_hmC <- SNCA_hmC %>% arrange(cpg)
+SNCA_mC$cpg <- rownames(SNCA_mC)
+SNCA_mC <- SNCA_mC %>% arrange(cpg)
+all.equal(SNCA_hmC$cpg, SNCA_mC$cpg) #TRUE
+
+SNCA_mC_melt <- melt(SNCA_mC, id.vars="pos")
+SNCA_mC_melt$value <- as.numeric(SNCA_mC_melt$value)
+SNCA_mC_melt$Genotype <- rep(NA, nrow(SNCA_mC_melt))
+SNCA_mC_melt[grep("ctrl",SNCA_mC_melt$variable),"Genotype"] <- "Control"
+SNCA_mC_melt[grep("WT",SNCA_mC_melt$variable),"Genotype"] <- "SNCA-OE"
+SNCA_mC_melt[grep("A30P",SNCA_mC_melt$variable),"Genotype"] <- "A30P"
+
+#remove sites with NA values
+SNCA_mC_melt <- SNCA_mC_melt[which(SNCA_mC_melt$Genotype %in% c("Control", "SNCA-OE", "A30P")),]
+
+#calculate group means for drawing lines
+ctrl_group_means <- SNCA_mC_melt[SNCA_mC_melt$Genotype=="Control",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+ctrl_group_means$Genotype <- "Control"
+
+A30P_group_means <- SNCA_mC_melt[SNCA_mC_melt$Genotype=="A30P",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+A30P_group_means$Genotype <- "A30P"
+
+WT_group_means <- SNCA_mC_melt[SNCA_mC_melt$Genotype=="SNCA-OE",] %>%
+  group_by(pos) %>%
+  summarise(mean = mean(value, na.rm=TRUE))
+WT_group_means$Genotype <- "SNCA-OE"
+
+all.equal(ctrl_group_means$pos, WT_group_means$pos, A30P_group_means$pos)
+group_means <- rbind(ctrl_group_means, WT_group_means, A30P_group_means)
+colnames(group_means)[2] <- "value"
+SNCA_mC_melt$Genotype <- reorder.factor(SNCA_mC_melt$Genotype, new.order=c("Control", "SNCA-OE", "A30P"))
+
+#subset to DM sites
+min <- min(c(SNCA[SNCA$threshold==TRUE,"pos"], SNCA_A30P[SNCA_A30P$threshold==TRUE,"pos"])) #90757351
+max <- max(c(SNCA[SNCA$threshold==TRUE,"pos"], SNCA_A30P[SNCA_A30P$threshold==TRUE,"pos"])) #90759618
+
+ggplot(SNCA_mC_melt, aes(SNCA_mC_melt$pos, SNCA_mC_melt$value)) + 
+  geom_point(aes(colour=Genotype, group=Genotype), data=SNCA_mC_melt) + 
+  scale_y_continuous(
+    "Beta value", limits=c(0,1)) + theme_bw() + geom_line(data=group_means, aes(group=group_means$Genotype, colour=as.factor(group_means$Genotype))) + scale_x_continuous("Chromosome 4 Coordinate", limits=c(min,max)) + scale_colour_manual(values=c("black", "gray75", "gray48"))
+```
+
+## Nicole Annotation Figure
+ Load Libraries and Data
+```{r}
+library(plyr)
+library(Gviz)
+library(rtracklayer)
+library(coMET)
+```
+
+### SNCA 
+```{r}
+#SNCA_probes <- c("cg00609961", "cg01742627", "cg05127899", "cg23326313", "cg04742282", "cg13293729", "cg15088539", "cg25005112", "cg26531141", "cg01597097", "cg08542016", "cg03720390", "cg04435719")
+range <- fdat[rownames(fdat) %in% SNCA_probes, ]
+SNCA_chr <- unique(range$CHR)
+SNCA_max <- max(range$MAPINFO)
+SNCA_min <- min(range$MAPINFO)
+subbed_fdat <- fdat[fdat$CHR == 4 & (fdat$MAPINFO >= SNCA_min & fdat$MAPINFO <= SNCA_max), ]
+betas <- t(betas(mC_methylumi_N)[(featureNames(mC_methylumi_N) %in% rownames(subbed_fdat)),])
+pdat <- pData(mC_methylumi_N)
+pdat$Sample_Label <- gsub(" ", "", pdat$Sample_Label)
+pdat$Sample_Label <- gsub("_", ".", pdat$Sample_Label)
+rownames(pdat) <- pdat$Sample_Label
+
+identical(rownames(betas), rownames(pdat)) #TRUE
+betas <- as.data.frame(cbind(pdat[,"Genotype"], betas))
+colnames(betas)[1] <- "Genotype"
+
+betas.GFP <- betas[betas$Genotype == "GFP",]
+betas.GFP <- betas.GFP[complete.cases(betas.GFP),]
+betas.GFP$Sample <- paste("Control", 1:nrow(betas.GFP), sep = ".")
+rownames(betas.GFP) <- betas.GFP$Sample 
+betas.GFP$Sample <- NULL
+betas.GFP$Genotype <- NULL
+betas.GFP <- as.data.frame(t(betas.GFP))
+betas.GFP$symbol <- rownames(betas.GFP)
+
+betas.WT <- betas[betas$Genotype == "WT",]
+betas.WT <- betas.WT[complete.cases(betas.WT),]
+betas.WT$Sample <- paste("WT aSyn", 1:nrow(betas.WT), sep = ".")
+rownames(betas.WT) <- betas.WT$Sample 
+betas.WT$Sample <- NULL
+betas.WT$Genotype <- NULL
+betas.WT <- as.data.frame(t(betas.WT))
+betas.WT$symbol <- rownames(betas.WT)
+
+betas.A30P <- betas[betas$Genotype == "A30P",]
+betas.A30P <- betas.A30P[complete.cases(betas.A30P),]
+betas.A30P$Sample <- paste("A30P aSyn", 1:nrow(betas.A30P), sep = ".")
+rownames(betas.A30P) <- betas.A30P$Sample 
+betas.A30P$Sample <- NULL
+betas.A30P$Genotype <- NULL
+betas.A30P <- as.data.frame(t(betas.A30P))
+betas.A30P$symbol <- rownames(betas.A30P)
+
+Genotype_betas <- join(betas.GFP, betas.WT)
+Genotype_betas <- join(Genotype_betas, betas.A30P)
+rownames(Genotype_betas) <- Genotype_betas$symbol
+SNCA_fdat <- fdat[rownames(fdat) %in% rownames(subbed_fdat), c("CHR", "MAPINFO")]
+SNCA_fdat$genome <- "hg19"
+SNCA_fdat$symbol <- rownames(SNCA_fdat)
+Genotype_betas <- join(Genotype_betas, SNCA_fdat)
+rownames(Genotype_betas) <- Genotype_betas$symbol
+colnames(Genotype_betas)
+Genotype_betas <- Genotype_betas[, c(8, 25:27, 1:7,9:24)]
+colnames(Genotype_betas)
+```
+
+Producing tracks and making figure
+```{r}
+# Chromosome Track
+SNCA_itrack <- IdeogramTrack(genome = unique(Genotype_betas$genome), chromosome = paste("chr", unique(Genotype_betas$CHR), sep = ""))
+# Basepair map track
+SNCA_gtrack <- GenomeAxisTrack(add53 = TRUE, add35 = TRUE, labelPos = "below")
+
+#intron/exon track
+knownGenes <- UcscTrack(genome = "hg19", chromosome = "chr4", 
+                        track = "knownGene", from = min(Genotype_betas$MAPINFO), to = max(Genotype_betas$MAPINFO),
+                        trackType = "GeneRegionTrack", 
+                        rstarts = "exonStarts", rends = "exonEnds", 
+                        gene = "name", symbol = "name", 
+                        transcript = "name", strand = "strand", 
+                        fill = "grey", name = "UCSC Genes", cex.title=1)
+# Data track
+Genotype_betas[,5:27]<- apply(Genotype_betas[,5:27], 2, function(x) as.numeric(as.character(x)))
+SNCA_dTrack <- DataTrack(data = Genotype_betas[,5:27], name = "DNAm Beta Value", start = Genotype_betas$MAPINFO, width = 1, chromosome = paste("chr", unique(Genotype_betas$CHR), sep=""), genome = unique(Genotype_betas$genome), groups = rep(c("WT aSyn", "A30P aSyn", "Control"), c(8,8,7)), type = c("a", "p"), col=c("gray75", "chocolate", "black"), jitter.x=T, factor = 2.5, cex = 1, alpha =1, cex.legend = 1, ylim=c(0,1), cex.title=1, cex.axis=1)
+
+#TFBS track
+mySession = browserSession("UCSC")
+genome(mySession) <- "hg19"
+snca.grange <- GRanges(paste("chr", unique(Genotype_betas$CHR), sep = ""), IRanges(min(Genotype_betas$MAPINFO) , max(Genotype_betas$MAPINFO) ))
+tbl.tfbs <- getTable(ucscTableQuery(mySession, track="Txn Factor ChIP", range=snca.grange))
+
+colnames(tbl.tfbs) <-  c("bin", "chr", "start", "end", "symbol", "score", "sourceCount", "sourceIDs", "sourceScores")
+#tbl.tfbs$symbol <- sapply(1:nrow(tbl.tfbs), function(x) unlist(strsplit(tbl.tfbs$symbol[x], split="\\$"))[2])
+#tbl.tfbs$symbol <- sapply(1:nrow(tbl.tfbs), function(x) unlist(strsplit(tbl.tfbs$symbol[x], split="_"))[1])
+tbl.tfbs$strand <- NULL
+tbl.tfbs$color <- c("steelblue4")
+
+TFBStrack <- GeneRegionTrack(tbl.tfbs, genome = unique(Genotype_betas$genome), chromosome = paste("chr", unique(Genotype_betas$CHR), sep = ""), name = "TFBS", exonAnnotation = "symbol", feature=as.vector(tbl.tfbs$color), steelblue4 = "cornsilk3", fontcolor.item="black", cex.title=1)
+
+tbl.gata <- tbl.tfbs[grep("GATA",tbl.tfbs$symbol),]
+GATAtrack <- GeneRegionTrack(tbl.gata, genome = unique(Genotype_betas$genome), chromosome = paste("chr", unique(Genotype_betas$CHR), sep = ""), name = "TFBS", exonAnnotation = "symbol", feature=as.vector(tbl.gata$color), steelblue4 = "cornsilk3", fontcolor.item="black", cex.title=1)
+
+#plotting
+plotTracks(list(SNCA_itrack, SNCA_gtrack, knownGenes, TFBStrack, SNCA_dTrack), from = min-100, to = max, sizes = c(0.05,0.1,0.2,0.2,0.5), fontsize.exon=8)
+
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/master_anno_202008.RData")
+SNCA_longest <- master_anno[master_anno$site %in% fdat[fdat$MAPINFO>=min & fdat$MAPINFO<=max & fdat$CHR==4,"TargetID"],]
+SNCA_longest_coord <- fdat[fdat$TargetID %in% SNCA_longest$site,c("TargetID","MAPINFO")]
+colnames(SNCA_longest_coord)[1] <- "site"
+SNCA_longest_coord$site <- as.character(SNCA_longest_coord$site)
+SNCA_longest <- join(SNCA_longest, SNCA_longest_coord)
+SNCA_longest <- SNCA_longest %>% arrange(MAPINFO)
+```
+![DNAm at SNCA gene](/home/BCRICWH.LAN/sschaffner/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SNCA_track_intronexon.png)
+
+### SNCA expression by isoform
+Data from Thomas Hentrich, in TPM.
+```{r}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SNCA_perGrp.RData")
+
+#on all transcripts
+SNCA_melt <- melt(meanResults)
+#ANOVA with Tukey HSD
+SNCA_melt$variable <- as.factor(SNCA_melt$variable)
+aov <- aov(value ~ variable, data=SNCA_melt)
+TukeyHSD(aov)
+#  Tukey multiple comparisons of means
+#    95% family-wise confidence level
+#
+#Fit: aov(formula = value ~ variable, data = SNCA_melt)
+#
+#$variable
+#               diff       lwr       upr     p adj
+#A30P-WT    40.27004 -255.6936 336.23364 0.9385018
+#GFP-WT   -177.12841 -473.0920 118.83519 0.3111973
+#GFP-A30P -217.39845 -513.3620  78.56515 0.1800092
+
+#on transcripts with TPM > 1
+meanResults <- meanResults[rowMeans(meanResults[,3:5])>1,] #7/9 transcripts
+SNCA_melt <- melt(meanResults)
+#ANOVA with Tukey HSD
+SNCA_melt$variable <- as.factor(SNCA_melt$variable)
+aov <- aov(value ~ variable, data=SNCA_melt)
+TukeyHSD(aov)
+#  Tukey multiple comparisons of means
+#    95% family-wise confidence level
+#
+#Fit: aov(formula = value ~ variable, data = SNCA_melt)
+#
+#$variable
+#               diff       lwr       upr     p adj
+#A30P-WT    51.70344 -316.0639 419.47081 0.9317619
+#GFP-WT   -227.86250 -595.6299 139.90486 0.2789365
+#GFP-A30P -279.56595 -647.3333  88.20142 0.1563356
+```
+
+#### Dec 14, 2021: Transcript-level pairwise comparisons
+
+From Thomas' email:
+
+"Here're the statistics for the SNCA isoforms as reported by R/fishpond (based on the estimated abundances derived from salmon and tximeta). The res_* objects contain the results from each pair-wise contrast between the groups, the snca_count object the per-samples counts these results are based on.
+
+For the plot I generated, I used a more or less arbitrary cutoff of rowMeans() > 1 TPM for the transcripts. As you know, there's a whole debate out there when to call a gene/transcript expressed. I typically get raised eyebrows when I show "too many" transcripts, although that's of course not an argument. But with the uncertainty of determining which read belongs to which transcript, I often leave out low expressed ones."
+
+I'll write the tables from the R data object to csv files so I can edit them in Excel to make tables for the manuscript.
+
+```{r}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/DTU_SNCA.RData")
+write.csv(res_snca_GFP.vs.WT, file="~/KoborLab/kobor_space/BRAINSTORM-KoborGroup/Personal  folders/Samantha/DecipherPD/LUHMES/Genotype manuscript/HMG/SNCA_tx_WT_GFP.csv")
+write.csv(res_snca_GFP.vs.A30P, file="~/KoborLab/kobor_space/BRAINSTORM-KoborGroup/Personal  folders/Samantha/DecipherPD/LUHMES/Genotype manuscript/HMG/SNCA_tx_A30P_GFP.csv")
+write.csv(res_snca_A30P.vs.WT, file="~/KoborLab/kobor_space/BRAINSTORM-KoborGroup/Personal  folders/Samantha/DecipherPD/LUHMES/Genotype manuscript/HMG/SNCA_tx_WT_A30P.csv")
+```
+
+#### Dec 15, 2021: Gene-level pairwise comparisons
+```{r}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/SNCA_geneStats.RData")
+
+snca_A30P.vs.GFP[,c("log2FoldChange","padj")]
+#                 log2FoldChange padj
+#ENSG00000145335        4.62092    0
+
+snca_WT.vs.GFP[,c("log2FoldChange","padj")]
+#                log2FoldChange padj
+#ENSG00000145335       4.367889    0
+
+snca_A30P.vs.WT[,c("log2FoldChange","padj")]
+#                log2FoldChange       padj
+#ENSG00000145335       0.253031 0.05988152
+```
+
+#### Checking for TFBS
+Particularly interested in GATA, since this could mediate effects of SNCA intron 1 DNAm on transcription.
+```{r}
+load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_mC_clean_SS_06182020.RData")
+fdat <- fData(mC_methylumi_N)
+SNCA_probes <- fdat[grep("SNCA",fdat$UCSC_REFGENE_NAME),] 
+SNCA_probes <- SNCA_probes[-grep("SNCAIP", SNCA_probes$UCSC_REFGENE_NAME),] #40 probes
+SNCA_probes[-which(SNCA_probes$TFBS_NAME==""),c("MAPINFO","TFBS_NAME")]
+#            MAPINFO              TFBS_NAME
+#cg00538060 90678469 chr4:90678364-90678986
+#cg02163025 90722285 chr4:90720690-90722456
+
+
+```
+
+UCSC genome browser TFBS tracks (hg19)
+
+chr4:90678364-90678986 - GATA2, GATA3, KAP1, ESR1. CpG covers GATA2, GATA3, KAP1.
+
+chr4:90720690-90722456 - GATA2 (two sites), POL2RA, EP300, FOS (two sites), JUN (two sites), USF1. CpG covers GATA2, USF1.
