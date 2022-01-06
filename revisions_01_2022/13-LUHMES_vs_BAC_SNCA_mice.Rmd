@@ -46,7 +46,7 @@ load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/transcript_d
 nrow(transcript_df_single <- transcript_df[-which(transcript_df$site %in% multi_transcript_df$site),]) #515,730
 colnames(multi_transcript_df)[2] <- "acc"
 nrow(master_df <- rbind(multi_transcript_df[,1:2], transcript_df_single[,c(1,3)])) #813,589
-#nrow(master_df_hmC <- master_df[master_df$site %in% DHMPs_WT$Name,]) #233,440
+nrow(master_df_hmC <- master_df[master_df$site %in% LUHMES_DHMPs_WT$Name,]) #233,440
 
 #getting differentially methylated genes list and their mouse homologs
 mart_human <- useMart("ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl", host="feb2014.archive.ensembl.org",path="/biomart/martservice",archive=FALSE, verbose=TRUE) #hg19
@@ -233,6 +233,21 @@ length(unique(betaResults_sub_sig5$gene)) #3,477 genes
 unique(betaResults_sub_sig5$gene[grep("Grik",betaResults_sub_sig5$gene)]) #"Grik3" "Grik4" "Grik2" "Grik1"
 ```
 
+### Permuting human-mouse gene overlap
+```{r}
+#Taking random probes from LUHMES and random cytosines from mice the same size as each hit list, and calculating gene-level overlaps
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/overlap_human_ms.R')
+overlap_human_ms(CpG_list_ms=betaResults[betaResults$threshold==TRUE,"site"], CpG_list_human=LUHMES_DMPs_WT[LUHMES_DMPs_WT$threshold==TRUE,"Name"], background.ms=betaResults, background.human=LUHMES_mC_human_to_mouse, master_df=master_df, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 1; Depletion 0"
+
+#Taking random cytosines from mice data covering the LUHMES DM genes the same size as the hit list of mice DM cytosines mapping to LUHMES DM genes, and calculating how many genes are DM in mice
+source('~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/overlap_DMhuman_ms.R')
+overlap_DMhuman_ms(CpG_list_ms=betaResults_sub[betaResults_sub$threshold==TRUE,"site"], background.ms=betaResults_sub, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0; Depletion 1"
+```
+
 ### Checking whether LUHMES/mice DNAhm genes were in SMITE modules
 ```{r}
 load("~/KoborLab/kobor_space/sschaffner/LUHMES_201806/clean_scripts/LUHMES_spinglass_WT_092020.RData")
@@ -382,6 +397,18 @@ betaResults_WTSE_TGSE_hmC[betaResults_WTSE_TGSE_hmC$gene%in%"Grik2",c("meth.diff
 nrow(betaResults_sub_sig5 <- betaResults_sub[abs(betaResults_sub$meth.diff)>=0.05,]) #187 cytosines
 length(unique(betaResults_sub_sig5$gene)) #42 genes
 unique(betaResults_sub_sig5$gene[grep("Grik",betaResults_sub_sig5$gene)]) #none
+```
+
+### Permuting human-mouse gene overlap
+```{r}
+overlap_human_ms(CpG_list_ms=betaResults_WTSE_TGSE_hmC[betaResults_WTSE_TGSE_hmC$threshold==TRUE,"site"], CpG_list_human=LUHMES_DHMPs_WT[LUHMES_DHMPs_WT$threshold==TRUE,"Name"], background.ms=betaResults_WTSE_TGSE_hmC, background.human=LUHMES_hmC_human_to_mouse, master_df=master_df_hmC, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0.9605; Depletion 0.0672"
+
+#Taking random cytosines from mice data covering the LUHMES DM genes the same size as the hit list of mice DM cytosines mapping to LUHMES DM genes, and calculating how many genes are DM in mice
+overlap_DMhuman_ms(CpG_list_ms=betaResults_sub[betaResults_sub$threshold==TRUE,"site"], background.ms=betaResults_sub, permutation_number=10000)
+#[1] "Permutation P values for enrichment and depletion"
+#[1] "Enrichment: 0; Depletion 1"
 ```
 
 ### Checking whether LUHMES/mice DNAhm genes were in SMITE modules
